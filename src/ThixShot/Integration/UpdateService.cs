@@ -11,7 +11,7 @@ public static class UpdateService
     private sealed record Package(string File, string Sha256);
     private sealed record Manifest(string Version, string Channel, long BuildNumber, Dictionary<string, Package> Packages);
     private static readonly Assembly Assembly = typeof(UpdateService).Assembly;
-    private static readonly string Channel = Metadata("ThixShotChannel") ?? "local";
+    public static string Channel { get; } = Metadata("ThixShotChannel") ?? "local";
     private static readonly long Build = long.TryParse(Metadata("ThixShotBuildNumber"), out var build) ? build : 0;
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(10) };
     private static readonly string OptInFile = Path.Combine(UserFiles.DirectoryPath, "automatic-updates");

@@ -75,14 +75,20 @@ jobs:
         run: ./scripts/package-windows.ps1 -Channel $env:CHANNEL -BuildNumber $env:GITHUB_RUN_NUMBER -BuildDate $env:BUILD_DATE
       - name: Installation und Deinstallation prüfen
         if: runner.os == 'Windows'
+        timeout-minutes: 5
         shell: pwsh
         run: |
           $msi = (Resolve-Path 'artifacts/packages/ThixShot-win-x64.msi').Path
           $target = Join-Path $env:LOCALAPPDATA 'Programs/ThixShot/ThixShot.exe'
           $loginItems = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
           foreach ($mode in '/i', '/x') {
-            $installer = Start-Process msiexec.exe -ArgumentList "$mode `"$msi`" /qn /norestart" -Wait -PassThru
-            if ($installer.ExitCode -ne 0) { throw "MSI $mode fehlgeschlagen ($($installer.ExitCode))." }
+            Write-Host "Starte msiexec $mode"
+            $log = Join-Path $env:RUNNER_TEMP ('installer-' + $mode.TrimStart('/') + '.log')
+            $installer = Start-Process msiexec.exe -ArgumentList "$mode `"$msi`" /qn /norestart /L*v `"$log`"" -PassThru -WindowStyle Hidden
+            if (!$installer.WaitForExit(120000) -or $installer.ExitCode -ne 0) {
+              if (Test-Path $log) { Get-Content $log -Tail 50 }
+              throw "MSI $mode wurde nicht erfolgreich abgeschlossen."
+            }
             if ((Test-Path $target) -ne ($mode -eq '/i')) { throw "Falscher Installationszustand bei $mode." }
             if ($mode -eq '/i') {
               $app = Start-Process $target -PassThru -WindowStyle Hidden
@@ -93,7 +99,7 @@ jobs:
               }
               if (!(Test-Path $loginItems)) { New-Item -Path $loginItems | Out-Null }
               New-ItemProperty -Path $loginItems -Name ThixShot -Value ('"' + $target + '" --autostart') -Force | Out-Null
-            } elseif (Get-ItemPropertyValue -Path $loginItems -Name ThixShot -ErrorAction SilentlyContinue) {
+            } elseif ($null -ne [Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run', 'ThixShot', $null)) {
               throw 'Deinstallation hat den ThixShot-Autostart nicht entfernt.'
             }
           }

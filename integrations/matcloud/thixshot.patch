@@ -58,28 +58,31 @@ index eb668b3..1f4912c 100644
  
          if (!await AppService.IsEnabledAsync(db, CloudApps.Drive, ct))
 diff --git a/tests/MatCloud.Tests/DriveApiTests.cs b/tests/MatCloud.Tests/DriveApiTests.cs
-index 864e18e..6a5d012 100644
+index 864e18e..b7b2188 100644
 --- a/tests/MatCloud.Tests/DriveApiTests.cs
 +++ b/tests/MatCloud.Tests/DriveApiTests.cs
-@@ -106,7 +106,7 @@ public sealed class DriveApiTests
+@@ -106,7 +106,9 @@ public sealed class DriveApiTests
          await using var app = TestApp.Create(test);
          var ct = CancellationToken.None;
  
 -        foreach (var appId in new[] { CloudApps.Drive, CloudApps.Write, CloudApps.Calc, CloudApps.Show })
-+        foreach (var appId in new[] { CloudApps.Drive, CloudApps.Write, CloudApps.Calc, CloudApps.Show, CloudApps.Shot })
++        using var write = await ClientAsync(app, CloudApps.Write);
++        await write.CreateDriveFolderAsync(null, CloudApps.Write, ct);
++        foreach (var appId in new[] { CloudApps.Drive, CloudApps.Calc, CloudApps.Show, CloudApps.Shot })
          {
              using var client = await ClientAsync(app, appId);
              await client.CreateDriveFolderAsync(null, appId, ct);
-@@ -126,7 +126,7 @@ public sealed class DriveApiTests
+@@ -125,8 +127,7 @@ public sealed class DriveApiTests
+         var (drive, _) = await TestApp.DeviceAsync(app, CloudApps.Drive, "PC-2");
          Assert.Equal(HttpStatusCode.Forbidden, (await drive.GetAsync(Contract.Clip.ClipContract.Settings)).StatusCode);
  
-         using var write = await ClientAsync(app, CloudApps.Write);
+-        using var write = await ClientAsync(app, CloudApps.Write);
 -        Assert.Equal(4, (await write.ListDriveFolderAsync(null, ct)).Total);
 +        Assert.Equal(5, (await write.ListDriveFolderAsync(null, ct)).Total);
          Assert.True((await AppService.SetEnabledAsync(test.NewContext(), new Actor(admin.Id, true), CloudApps.Drive, false)).Ok);
          var off = await Assert.ThrowsAsync<CloudException>(() => write.ListDriveFolderAsync(null, ct));
          Assert.Equal(HttpStatusCode.Forbidden, off.StatusCode);
-@@ -135,7 +135,7 @@ public sealed class DriveApiTests
+@@ -135,7 +136,7 @@ public sealed class DriveApiTests
          // ThixWrite itself is still on: its account and its general sync work
          Assert.Equal(CloudApps.Write, (await write.GetAccountAsync(ct)).App);
          Assert.True((await AppService.SetEnabledAsync(test.NewContext(), new Actor(admin.Id, true), CloudApps.Drive, true)).Ok);

@@ -5,6 +5,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using MatDesktop;
 using SkiaSharp;
 using ThixShot.Editor;
 using ThixShot.Integration;
@@ -35,7 +36,7 @@ public sealed class StudioTests
             Click(studio, "Video");
             Assert.NotNull(ButtonWithLabel(studio, "Aufnahme starten"));
             Assert.Contains(studio.GetVisualDescendants().OfType<CheckBox>(), box => box.Content as string == "Fokus-Zoom");
-            Click(studio, UpdateService.DisplayVersion);
+            Click(studio, MatVersion.Format(UpdateService.DisplayVersion, UpdateService.Channel));
             Assert.Contains(studio.GetVisualDescendants().OfType<TextBlock>(), block => block.Text == "Über ThixShot");
         }
         finally { studio.Close(); }
@@ -89,7 +90,7 @@ public sealed class StudioTests
         window.GetVisualDescendants().OfType<Button>(), button => button.Content as string == label ||
             button.GetVisualDescendants().OfType<TextBlock>().Any(text => text.Text == label));
 
-    private static void Click(Window window, string label)
+    internal static void Click(Window window, string label)
     {
         window.UpdateLayout();
         var button = ButtonWithLabel(window, label);

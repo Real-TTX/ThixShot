@@ -10,6 +10,6 @@ git apply ../ThixShot/integrations/matcloud/thixshot.patch
 dotnet test
 ```
 
-Die geänderte MatCloud regulär bereitstellen und im Administrationsbereich ThixShot und ThixDrive aktivieren. In ThixShot unter **ThixCloud → Gerät verbinden** die HTTPS-Adresse der Installation angeben, den Gerätecode im Browser bestätigen und eine Aufnahme in der Mediathek für den Upload auswählen. Der Gerätezugang lässt sich im ThixCloud-Konto widerrufen.
+Die geänderte MatCloud regulär bereitstellen und im Administrationsbereich ThixShot und ThixDrive aktivieren. Unter **ThixCloud** die HTTPS-Adresse der Installation angeben und **Im Browser anmelden** wählen. Den Gerätecode bestätigen und eine Aufnahme in der Mediathek für den Upload auswählen. Der Gerätezugang lässt sich im ThixCloud-Konto widerrufen.
 
 Der Desktop-Client enthält eine mit MatClouds `tools/contract-copy.js` erzeugte Kopie des gepatchten Vertrags 1.4.1. Die Speicherberechtigung und das Kontingent prüft der Server bei jedem Upload.

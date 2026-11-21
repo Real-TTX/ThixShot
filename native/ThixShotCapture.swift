@@ -26,6 +26,7 @@ private final class MovieOutput: NSObject, SCStreamOutput, SCStreamDelegate {
     let outputSize: CGSize
     let screenRect: CGRect
     let focusEnabled: Bool
+    let firstScreenFrame = DispatchSemaphore(value: 0)
     var sessionStart: CMTime?
     var lastVideoTime: CMTime?
     private var latestFrame: CIImage?
@@ -123,6 +124,7 @@ private final class MovieOutput: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         if lastVideoTime == nil && announce {
             FileHandle.standardOutput.write(Data("READY\n".utf8))
+            firstScreenFrame.signal()
         }
         lastVideoTime = time
     }
@@ -249,9 +251,13 @@ private enum CaptureHelper {
             animation.schedule(deadline: .now(), repeating: .milliseconds(33))
         }
         animation.resume()
-        queue.asyncAfter(deadline: .now() + 12) {
-            if movie.lastVideoTime == nil { fail(CaptureError("macOS hat kein Bildschirmbild geliefert.")) }
+        let firstFrame = movie.firstScreenFrame
+        let started = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            DispatchQueue.global().async {
+                continuation.resume(returning: firstFrame.wait(timeout: .now() + 12) == .success)
+            }
         }
+        guard started else { throw CaptureError("macOS hat kein Bildschirmbild geliefert.") }
         // EOF also ends capture if the desktop application exits.
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             DispatchQueue.global().async { _ = readLine(); continuation.resume() }

@@ -6,22 +6,25 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using MatDesktop;
+using Avalonia.Controls.Documents;
 using ThixShot.Editor;
 using ThixShot.Integration;
 using ThixShot.Library;
 
 namespace ThixShot.Studio;
 
-internal sealed partial class StudioWindow : Window
+internal sealed partial class StudioWindow : MatWindow
 {
     private readonly ContentControl page = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
     private readonly TextBlock message = Ui.Text("", 13);
     private readonly Border notice;
-    private readonly Dictionary<string, Button> nav = [];
+    private readonly MatNav sidebar = new();
+    private readonly TextBox globalSearch = new() { Watermark = "Mediathek durchsuchen" };
     private readonly List<Bitmap> thumbnails = [];
     private readonly CancellationTokenSource lifetime = new();
     private readonly List<string> destinations = ["Aufnahmestudio", "Mediathek", "ThixCloud", "Einstellungen", "Über ThixShot"];
-    private readonly TextBlock libraryCount = Ui.Text("0", 11, Ui.Muted);
+
     private readonly DispatcherTimer updateTimer = new() { Interval = TimeSpan.FromHours(6) };
     private string current = "Aufnahmestudio";
     private bool video, region, focusZoom = true, showCursor = true, systemAudio, busy, allowClose;
@@ -32,40 +35,60 @@ internal sealed partial class StudioWindow : Window
 
     public StudioWindow()
     {
-        Title = "ThixShot"; Width = 1160; Height = 774; MinWidth = 920; MinHeight = 600;
-        Icon = Ui.WindowIcon();
+        Title = "ThixShot"; Width = 1180; Height = 760; MinWidth = 780; MinHeight = 510;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
-        var layout = new Grid { ColumnDefinitions = new ColumnDefinitions("196,*") };
-        var sidebar = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"), Margin = new Thickness(14, 25, 14, 14) };
-        var brand = Ui.Row(10, new Image { Source = Ui.Asset("Mark.png"), Width = 37, Height = 37 },
-            Ui.Stack(0, Ui.Text("ThixShot", 20, weight: FontWeight.Bold), Ui.Text("ThixApps.de", 11, Ui.Muted)));
-        brand.Margin = new Thickness(8, 0, 0, 35);
-        sidebar.Children.Add(brand);
-        var menu = Ui.Stack(5);
-        void AddNav(int i, string icon)
+        UseOwnTitleBar();
+        var wordmark = new TextBlock { FontSize = MatTokens.Type.FsXl, FontWeight = FontWeight.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center };
+        var brandSuffix = new Run("Shot");
+        brandSuffix[!Avalonia.Controls.Documents.Run.ForegroundProperty] = this.GetResourceObservable("Mat.AccentText").ToBinding();
+        wordmark.Inlines!.Add(new Run("Thix")); wordmark.Inlines.Add(brandSuffix);
+        var titleBar = new MatTitleBar { AppName = Title, Logo = Ui.Asset("Mark.png"), WordMark = wordmark };
+        globalSearch.Themed("MatSearchBox");
+        globalSearch.TextChanged += (_, _) =>
         {
-            var title = destinations[i];
-            var button = Ui.Button(title, icon, () => Navigate(title), "flat");
-            button.Height = 40;
-            button.HorizontalAlignment = HorizontalAlignment.Stretch;
-            if (i == 1 && button.Content is StackPanel row) row.Children.Add(libraryCount);
-            nav[title] = button;
-            menu.Children.Add(button);
-        }
-        AddNav(0, "studio"); AddNav(1, "library");
-        menu.Children.Add(new Border { Height = 1, Background = Ui.Line, Margin = new Thickness(8, 14) });
-        AddNav(2, "cloud"); AddNav(3, "settings");
-        Grid.SetRow(menu, 1); sidebar.Children.Add(menu);
-        var version = Ui.Button(UpdateService.DisplayVersion, "info", () => Navigate(destinations[4]), "flat");
-        ToolTip.SetTip(version, "Über ThixShot"); Grid.SetRow(version, 3); sidebar.Children.Add(version);
-        layout.Children.Add(new Border { Background = Ui.Brush("#F3F1EE"), BorderBrush = Ui.Line, BorderThickness = new Thickness(0,0,1,0), Child = sidebar });
+            if (busy) return;
+            search = globalSearch.Text ?? "";
+            if (search.Length == 0 && current != destinations[1]) return;
+            pageNumber = 0; current = destinations[1]; RefreshPage();
+        };
+        var captureShortcut = OperatingSystem.IsMacOS() ? "⌘ + Enter" : "Strg + Enter";
+        var quickCapture = Ui.Button("Aufnehmen", "camera", () => Run(CaptureAsync));
+        var keys = new Border { Child = Ui.Text(captureShortcut,12), Padding = new Thickness(7,2),
+            VerticalAlignment = VerticalAlignment.Center }.Themed("MatKeyCap");
+        var topTools = Ui.Columns("*,Auto,Auto",globalSearch,quickCapture,keys); topTools.ColumnSpacing = 10;
+        titleBar.Center = topTools;
+        sidebar.AppName = Title;
+        sidebar.TitleBar = titleBar;
+        sidebar.Version = UpdateService.DisplayVersion;
+        sidebar.Channel = UpdateService.Channel;
+        sidebar.FoldShortcut = OperatingSystem.IsMacOS() ? "⌘+B" : "Strg+B";
+        sidebar.Items.Add(new MatNavItem("monitor",destinations[0]));
+        sidebar.Items.Add(new MatNavItem("layers",destinations[1]));
+        sidebar.Settings = new MatNavItem("settings",destinations[3]);
+        sidebar.ItemInvoked += (_, item) => Navigate(item.Label);
+        sidebar.AboutRequested += (_, _) => Navigate(destinations[4]);
+        sidebar.UpdateRequested += (_, _) => { settingsTab = 1; Navigate(destinations[3]); };
+        sidebar.IsFolded = File.Exists(FoldPreference);
+        sidebar.FoldChanged += (_, folded) =>
+        {
+            try
+            {
+                if (folded) UserFiles.Write(FoldPreference,"1"); else File.Delete(FoldPreference);
+            }
+            catch (IOException ex) { ShowMessage(ex.Message); }
+            RefreshFoot();
+        };
         var main = new Grid { RowDefinitions = new RowDefinitions("*,Auto") };
         main.Children.Add(page);
         message.TextWrapping = TextWrapping.Wrap;
         notice = Ui.Card(Ui.Columns("*,Auto", message, Ui.Button("Schließen", null, () => ShowMessage(""), "flat")), 9);
-        notice.Margin = new Thickness(30, 0, 30, 12); notice.IsVisible = false;
+        notice.Margin = new Thickness(16, 0, 16, 10); notice.IsVisible = false;
         Grid.SetRow(notice, 1); main.Children.Add(notice);
-        Grid.SetColumn(main, 1); layout.Children.Add(main); Content = layout;
+        var layout = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+        var body = Ui.Columns("Auto,*",sidebar,main);
+        layout.Children.Add(titleBar); Grid.SetRow(body,1); layout.Children.Add(body);
+        Content = layout;
         Navigate(current);
         Closing += (_, e) =>
         {
@@ -75,9 +98,15 @@ internal sealed partial class StudioWindow : Window
         Closed += (_, _) => { ClearImages(); lifetime.Dispose(); };
         KeyDown += (_, e) =>
         {
-            if (busy || current != destinations[0]) return;
-            if (e.Key == Key.Enter && e.KeyModifiers.HasFlag(OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control))
-            { e.Handled = true; Run(CaptureAsync); }
+            if (busy || !e.KeyModifiers.HasFlag(OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control)) return;
+            switch (e.Key)
+            {
+                case Key.Enter: Run(CaptureAsync); break;
+                case Key.B: sidebar.IsFolded = !sidebar.IsFolded; break;
+                case Key.F: globalSearch.Focus(); globalSearch.SelectAll(); break;
+                default: return;
+            }
+            e.Handled = true;
         };
         Opened += async (_, _) => { updateTimer.Start(); await AutomaticUpdateAsync(); };
         updateTimer.Tick += async (_, _) => await AutomaticUpdateAsync();
@@ -98,11 +127,14 @@ internal sealed partial class StudioWindow : Window
     private void RefreshPage()
     {
         ClearImages();
-        foreach (var (key, button) in nav) button.Classes.Set("active", key == current);
+        foreach (var item in sidebar.Items) item.IsCurrent = item.Label == current;
+        if (sidebar.Settings != null) sidebar.Settings.IsCurrent = current == destinations[3];
+        sidebar.UpdateVersion = pendingVersion;
+        RefreshFoot();
         try
         {
             var items = MediaLibrary.List();
-            libraryCount.Text = items.Count.ToString();
+
             Control content = current switch
             {
                 "Aufnahmestudio" => StudioPage(items),
@@ -111,7 +143,7 @@ internal sealed partial class StudioWindow : Window
                 "Einstellungen" => SettingsPage(),
                 _ => AboutPage()
             };
-            page.Content = new ScrollViewer { Content = new Border { Padding = new Thickness(32, 27, 32, 27), Child = content } };
+            page.Content = current == destinations[0] ? content : new ScrollViewer { Content = new Border { Padding = new Thickness(24, 22), Child = content } };
         }
         catch (Exception error) { ShowMessage(error.Message); }
     }
@@ -130,31 +162,51 @@ internal sealed partial class StudioWindow : Window
         }
     }
 
-    private static Control Heading(string title, string detail) =>
-        Ui.Stack(4, Ui.Text(title, 31, weight: FontWeight.SemiBold), Ui.Text(detail, 14, Ui.Muted));
+    private static string FoldPreference => Path.Combine(UserFiles.DirectoryPath, "sidebar-folded");
+    private void RefreshFoot()
+    {
+        var label = CloudService.IsConnected ? "ThixCloud verbunden" : "Mit Cloud verbinden";
+        var cloud = Ui.Button(label, "cloud", () => Navigate(destinations[2]), "flat");
+        if (sidebar.IsFolded) cloud.Content = Ui.Icon("cloud");
+        ToolTip.SetTip(cloud, label);
+        sidebar.Foot = cloud;
+    }
+
+    private static Border Rule() => new Border { Height = 1 }.Use(Border.BackgroundProperty,"Mat.Border");
 
     private Control StudioPage(IReadOnlyList<MediaItem> items)
     {
-        var modes = Ui.Row(3);
+        var modes = Ui.Row(6);
         foreach (var (name, icon, setting) in new[] { ("Screenshot","camera",false), ("Video","video",true) })
         {
-            var button = Ui.Button(name, icon, () => { video = setting; RefreshPage(); }, "flat");
-            button.Classes.Set("active", video == setting); modes.Children.Add(button);
+            var button = Ui.Button(name, icon, () => { video = setting; RefreshPage(); });
+            if (video == setting) button.Use(Button.BackgroundProperty,"Mat.AccentSoft").Use(Button.BorderBrushProperty,"Mat.Accent");
+            modes.Children.Add(button);
         }
-        var modeBox = Ui.Card(modes, 3); modeBox.CornerRadius = new CornerRadius(10); modeBox.HorizontalAlignment = HorizontalAlignment.Left;
-        var preview = new Grid { MinHeight = 230, Children = { new StudioPreview { Region = region } } };
-        var format = Ui.Text(video ? "MP4   /   H.264" : "PNG   /   BILD", 10, Brushes.White, FontWeight.SemiBold);
-        var formatTag = new Border { Background = Ui.Brush("#80321F23"), CornerRadius = new CornerRadius(5), Padding = new Thickness(8,4),
-            Margin = new Thickness(12), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top, Child = format };
-        preview.Children.Add(formatTag);
-        var sample = Ui.Button("Beispiel im Editor öffnen", "edit", () => Run(EditSampleAsync));
+        var title = new TextBlock { Text = "Aufnahmestudio", VerticalAlignment = VerticalAlignment.Center }.Themed("MatText.PageTitle");
+        var heading = Ui.Columns("*,Auto", title, modes);
+        var main = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"), Margin = new Thickness(24,21,20,15), RowSpacing = 14 };
+        main.Children.Add(heading);
+        var count = Ui.Text($"{items.Count} {(items.Count == 1 ? "Aufnahme" : "Aufnahmen")}", 13, Ui.Muted);
+        var section = Ui.Columns("*,Auto", Ui.Text("Letzte Aufnahmen",14,weight:FontWeight.SemiBold), count);
+        Grid.SetRow(section,1); main.Children.Add(section);
+        Control recent = items.Count == 0 ? EmptyLibrary(false) :
+            new ScrollViewer { Content = Ui.Stack(7,items.Take(8).Select(ItemRow).ToArray()) };
+        Grid.SetRow(recent,2); main.Children.Add(recent);
+        var library = Ui.Button("Mediathek öffnen","library",() => Navigate(destinations[1]));
+        library.HorizontalAlignment = HorizontalAlignment.Left;
+        Grid.SetRow(library,3); main.Children.Add(library);
+
+        var preview = new Border { Height = 148, CornerRadius = new CornerRadius(MatTokens.Size.RadiusLg),
+            ClipToBounds = true, Child = new StudioPreview { Region = region } };
+        var sample = Ui.Button("Beispielbild bearbeiten", "edit", () => Run(EditSampleAsync));
         sample.HorizontalAlignment = HorizontalAlignment.Left;
-        var previewPane = Ui.Stack(10, new Border { Child = preview, CornerRadius = new CornerRadius(9), ClipToBounds = true }, sample);
-        var controls = Ui.Stack(7, Ui.Text(video ? "Video aufnehmen" : "Screenshot aufnehmen", 21, weight: FontWeight.SemiBold));
-        controls.Children.Add(Ui.Text("Aufnahmebereich", 12, Ui.Muted, FontWeight.SemiBold));
-        controls.Children.Add(Ui.Choices(["Gesamter Hauptbildschirm","Bereich auswählen"], region ? 1 : 0, i => { region = i == 1; RefreshPage(); }));
-        controls.Children.Add(Ui.Text("Zeitverzögerung", 12, Ui.Muted, FontWeight.SemiBold));
-        controls.Children.Add(Ui.Choices(["Keine Verzögerung","3 Sekunden","5 Sekunden","10 Sekunden"], Array.IndexOf(Delays, delay), i => delay = Delays[i]));
+        var controls = Ui.Stack(12, preview, sample, Rule(),
+            new TextBlock { Text = video ? "Videoaufnahme" : "Screenshot" }.Themed("MatText.SectionTitle"));
+        var source = Ui.Choices(["Gesamter Hauptbildschirm","Bereich auswählen"],region ? 1 : 0, i => { region = i == 1; RefreshPage(); });
+        var timer = Ui.Choices(["Keine Verzögerung","3 Sekunden","5 Sekunden","10 Sekunden"],Array.IndexOf(Delays,delay),i => delay = Delays[i]);
+        controls.Children.Add(Ui.Stack(4, new TextBlock { Text = "Aufnahmebereich" }.Themed("MatText.FieldLabel"),source));
+        controls.Children.Add(Ui.Stack(4, new TextBlock { Text = "Zeitverzögerung" }.Themed("MatText.FieldLabel"),timer));
         if (video)
         {
             controls.Children.Add(Ui.Check("Fokus-Zoom", focusZoom, value => focusZoom = value));
@@ -162,24 +214,38 @@ internal sealed partial class StudioWindow : Window
             controls.Children.Add(Ui.Check("Systemton aufnehmen", systemAudio, value => systemAudio = value));
         }
         var capture = Ui.Button(video ? "Aufnahme starten" : "Screenshot erstellen", video ? "record" : "camera", () => Run(CaptureAsync), "primary");
-        capture.Margin = new Thickness(0,7,0,0); capture.Height = 40; capture.HorizontalAlignment = HorizontalAlignment.Stretch;
-        capture.HorizontalContentAlignment = HorizontalAlignment.Center;
-        ToolTip.SetTip(capture, OperatingSystem.IsMacOS() ? "⌘ + Enter" : "Strg + Enter");
-        controls.Children.Add(capture);
-        var captureCard = Ui.Card(Ui.Columns("1.45*,22,*", previewPane, new Border(), controls), 17);
-        var recentHeading = Ui.Columns("*,Auto", Ui.Text("Letzte Aufnahmen", 21, weight: FontWeight.SemiBold),
-            Ui.Button("Mediathek öffnen", "right", () => Navigate(destinations[1]), "flat"));
-        Control recent = items.Count == 0 ? EmptyLibrary(false) : Ui.Stack(0, items.Take(3).Select(ItemRow).ToArray());
-        return Ui.Stack(17, Heading("Aufnahmestudio", "Screenshots gestalten und Bildschirmvideos aufnehmen."),
-            modeBox, captureCard, recentHeading, items.Count == 0 ? recent : Ui.Card(recent, 4));
+        capture.HorizontalAlignment = HorizontalAlignment.Left; controls.Children.Add(capture);
+        var inspector = new Border { BorderThickness = new Thickness(1,0,0,0),
+            Child = new ScrollViewer { Content = new Border { Padding = new Thickness(20,22), Child = controls } } }
+            .Use(Border.BackgroundProperty,"Mat.Surface").Use(Border.BorderBrushProperty,"Mat.Border");
+        var split = Ui.Columns("*,310",main,inspector);
+        void Adapt(double width)
+        {
+            split.ColumnDefinitions[1].Width = new GridLength(width < 740 ? 250 : 320);
+            heading.ColumnDefinitions[1].Width = width < 740 ? new GridLength(0) : GridLength.Auto;
+            modes.IsVisible = width >= 740;
+            if (width < 740 && !controls.Children.Any(c => c.Name == "NarrowMode"))
+            {
+                var mode = Ui.Choices(["Screenshot","Video"],video ? 1 : 0,i => { video = i == 1; RefreshPage(); });
+                mode.Name = "NarrowMode"; controls.Children.Insert(0,mode);
+            }
+            if (controls.Children.FirstOrDefault(c => c.Name == "NarrowMode") is { } narrow) narrow.IsVisible = width < 740;
+        }
+        split.SizeChanged += (_, e) => Adapt(e.NewSize.Width);
+        return split;
     }
     private static readonly int[] Delays = [0,3,5,10];
     private static Control EmptyLibrary(bool filtered)
     {
-        var icon = Ui.Card(Ui.Icon(filtered ? "search" : "library", 23, Ui.Muted), 12);
-        icon.Background = Ui.Brush("#F5F2EF");
-        return Ui.Card(Ui.Row(15, icon, Ui.Stack(3, Ui.Text(filtered ? "Keine Treffer" : "Noch keine Aufnahmen", 15, weight: FontWeight.SemiBold),
-            Ui.Text(filtered ? "Suchtext oder Filter ändern." : "Gespeicherte Screenshots und Videos erscheinen hier.", 13, Ui.Muted))), 20);
+        var icon = new Border { Width = 64, Height = 64, CornerRadius = new CornerRadius(12), HorizontalAlignment = HorizontalAlignment.Center,
+            Child = Ui.Icon(filtered ? "search" : "library",30,Ui.Accent) }.Use(Border.BackgroundProperty,"Mat.AccentSoft");
+        var title = new TextBlock { Text = filtered ? "Keine Treffer" : "Noch keine Aufnahmen", HorizontalAlignment = HorizontalAlignment.Center }.Themed("MatText.SectionTitle");
+        var hint = new TextBlock { Text = filtered ? "Suchtext oder Filter ändern." : "Gespeicherte Screenshots und Videos erscheinen hier.",
+            TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap }.Themed("MatText.Muted");
+        var panel = Ui.Stack(10,icon,title,hint);
+        panel.VerticalAlignment = VerticalAlignment.Center; panel.HorizontalAlignment = HorizontalAlignment.Center;
+        panel.MaxWidth = 320;
+        return panel;
     }
     private async Task EditSampleAsync()
     {
@@ -193,3 +259,4 @@ internal sealed partial class StudioWindow : Window
         if (path != null) { selectedPath = path; ShowMessage($"Gespeichert · {Path.GetFileName(path)}"); }
     }
 }
+

@@ -5,6 +5,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using MatDesktop;
 using ShapePath = Avalonia.Controls.Shapes.Path;
 
 namespace ThixShot.Studio;
@@ -13,8 +14,16 @@ internal static class Ui
 {
     public static readonly IBrush Ink = Brush("#292625"), Muted = Brush("#6D6661"), Line = Brush("#E3DFDB"), Accent = Brush("#BA493D");
     public static IBrush Brush(string hex) => new SolidColorBrush(Color.Parse(hex));
-    public static TextBlock Text(string text, double size = 14, IBrush? color = null, FontWeight? weight = null) =>
-        new() { Text = text, FontSize = size, Foreground = color ?? Ink, FontWeight = weight ?? FontWeight.Normal, VerticalAlignment = VerticalAlignment.Center };
+    public static TextBlock Text(string text, double size = 14, IBrush? color = null, FontWeight? weight = null)
+    {
+        var label = new TextBlock { Text = text, FontSize = size, FontWeight = weight ?? FontWeight.Normal, VerticalAlignment = VerticalAlignment.Center };
+        var token = ColorToken(color);
+        if (token != null) label.Use(TextBlock.ForegroundProperty, token);
+        else label.Foreground = color;
+        return label;
+    }
+    private static string? ColorToken(IBrush? color) => color == null || color == Ink ? "Mat.Text" :
+        color == Muted ? "Mat.TextMuted" : color == Accent ? "Mat.AccentText" : color == Line ? "Mat.Border" : null;
     public static StackPanel Stack(double spacing = 8, params Control[] children)
     {
         var stack = new StackPanel { Spacing = spacing };
@@ -33,15 +42,21 @@ internal static class Ui
         for (int i = 0; i < children.Length; i++) { Grid.SetColumn(children[i], i); grid.Children.Add(children[i]); }
         return grid;
     }
-    public static Border Card(Control content, double padding = 20) => new()
-    {
-        Child = content, Background = Brushes.White, BorderBrush = Line, BorderThickness = new Thickness(1),
-        Padding = new Thickness(padding), CornerRadius = new CornerRadius(14), ClipToBounds = true
-    };
+    public static Border Card(Control content, double padding = 20) =>
+        new Border { Child = content, Padding = new Thickness(padding), ClipToBounds = true }.Themed("MatCard");
     public static Control Icon(string key, double size = 18, IBrush? color = null)
     {
-        var path = new ShapePath { Data = Geometry.Parse(Paths[key]), Stroke = color ?? Ink, StrokeThickness = 1.65,
+        string name = key switch { "studio" or "screen" => "monitor", "library" => "layers", "video" => "play",
+            "right" => "chevron-right", "arrow" => "arrow-right", "time" => "clock", "record" => "circle", _ => key };
+        var token = ColorToken(color);
+        if (MatIcon.Find(name) != null)
+        {
+            var icon = new MatIcon { Icon = name, Size = size, Width = size, Height = size, Foreground = color };
+            return token == null ? icon : icon.Use(MatIcon.ForegroundProperty, token);
+        }
+        var path = new ShapePath { Data = Geometry.Parse(Paths[key]), Stroke = color, StrokeThickness = 1.65,
             StrokeLineCap = PenLineCap.Round, StrokeJoin = PenLineJoin.Round };
+        if (token != null) path.Use(ShapePath.StrokeProperty, token);
         var canvas = new Canvas { Width = 24, Height = 24, Children = { path } };
         return new Viewbox { Width = size, Height = size, Child = canvas, VerticalAlignment = VerticalAlignment.Center };
     }
@@ -49,7 +64,8 @@ internal static class Ui
     {
         var color = style == "primary" ? Brushes.White : null;
         var result = new Button { Content = icon is null ? label : Row(8, Icon(icon, 17, color), Text(label, 13, color)) };
-        if (style != null) result.Classes.Add(style);
+        if (style == "primary") result.Themed("MatButton.Primary");
+        if (style == "flat") result.Themed("MatButton.Ghost");
         result.Click += (_, _) => action();
         return result;
     }

@@ -78,5 +78,8 @@ if [[ "${GITHUB_ACTIONS:-}" == true && "$arch" == "$(uname -m)" ]]; then
 fi
 ditto -c -k --keepParent "$app" "$out/ThixShot-$rid.zip"
 ln -s /Applications "$work/image/Applications"
-hdiutil create -volname ThixShot -srcfolder "$work/image" -ov -format UDZO "$out/ThixShot-$rid.dmg"
+# hdiutil can underestimate a signed, sparse .NET executable on APFS. Its
+# logical size plus headroom for HFS+ metadata must fit the mounted image.
+image_mib="$(find "$work/image" -type f -exec stat -f %z {} + | awk '{bytes += $1} END {print int(bytes / 1048576) + 65}')"
+hdiutil create -volname ThixShot -fs HFS+ -size "${image_mib}m" -srcfolder "$work/image" -ov -format UDZO "$out/ThixShot-$rid.dmg"
 hdiutil verify "$out/ThixShot-$rid.dmg"

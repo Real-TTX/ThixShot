@@ -6,6 +6,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using MatDesktop;
 using SkiaSharp;
 using ThixShot.Capture;
 using ThixShot.Editor;
@@ -65,12 +66,12 @@ internal sealed partial class StudioWindow
 
     private async Task CountdownAsync()
     {
-        var label = Ui.Text("", 24, weight: FontWeight.SemiBold);
-        var panel = Floating("Aufnahme vorbereiten", label);
+        var label = Ui.Text("", MatTokens.Type.FsLg, weight: FontWeight.SemiBold);
+        var panel = Floating("Aufnahme vorbereiten");
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         panel.Closed += (_, _) => cancel.Cancel();
         panel.KeyDown += (_, e) => { if (e.Key == Key.Escape) panel.Close(); };
-        panel.Content = Ui.Card(Ui.Row(15, label, Ui.Button("Abbrechen", null, panel.Close)), 10);
+        panel.Content = CaptureBar("clock", "Mat.AccentText", label, Ui.Button("Abbrechen", null, panel.Close));
         panel.Show();
         try
         {
@@ -83,10 +84,21 @@ internal sealed partial class StudioWindow
         finally { if (panel.IsVisible) panel.Close(); }
     }
 
-    private static Window Floating(string title, Control content)
+    private static Border CaptureBar(string icon, string color, TextBlock label, Button action)
     {
-        var window = new Window { Title = title, Content = content, SizeToContent = SizeToContent.WidthAndHeight,
-            CanResize = false, Topmost = true, ShowInTaskbar = true, SystemDecorations = SystemDecorations.BorderOnly,
+        var glyph = new MatIcon { Icon = icon, Size = 18, IsFilled = icon == "circle", VerticalAlignment = VerticalAlignment.Center }
+            .Use(MatIcon.ForegroundProperty, color);
+        var row = Ui.Row(12, glyph, label, action);
+        return new Border
+        {
+            Child = row, Padding = new Thickness(15, 9), BorderThickness = new Thickness(1)
+        }.Use(Border.BackgroundProperty, "Mat.Surface").Use(Border.BorderBrushProperty, "Mat.BorderStrong");
+    }
+
+    private static Window Floating(string title)
+    {
+        var window = new MatWindow { Title = title, SizeToContent = SizeToContent.WidthAndHeight,
+            CanResize = false, Topmost = true, ShowInTaskbar = true, SystemDecorations = SystemDecorations.None,
             WindowStartupLocation = WindowStartupLocation.Manual, Icon = Ui.WindowIcon() };
         window.PointerPressed += (_, e) => { if (e.Source is TextBlock && e.GetCurrentPoint(window).Properties.IsLeftButtonPressed) window.BeginMoveDrag(e); };
         if (window.Screens.Primary is { } screen)
@@ -111,10 +123,10 @@ internal sealed partial class StudioWindow
             stop.TrySetResult();
             startup.Cancel();
         }
-        var timerLabel = Ui.Text("Startet …", 16, weight: FontWeight.SemiBold);
-        var panel = Floating("ThixShot · Bildschirmaufnahme", Ui.Card(Ui.Row(12,
-            Ui.Icon("record", 20, Ui.Accent), timerLabel,
-            Ui.Button("Stopp", "stop", RequestStop, "primary")), 9));
+        var timerLabel = Ui.Text("Startet …", MatTokens.Type.FsMd, weight: FontWeight.SemiBold)
+            .Use(TextBlock.FontFamilyProperty, "Mat.Mono");
+        var panel = Floating("ThixShot · Bildschirmaufnahme");
+        panel.Content = CaptureBar("circle", "Mat.DangerText", timerLabel, Ui.Button("Stopp", "stop", RequestStop, "primary"));
         var clock = new Stopwatch();
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
         timer.Tick += (_, _) => timerLabel.Text = clock.Elapsed.ToString(clock.Elapsed.TotalHours >= 1 ? @"hh\:mm\:ss" : @"mm\:ss");

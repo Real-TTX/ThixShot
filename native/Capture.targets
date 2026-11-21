@@ -1,0 +1,21 @@
+<Project>
+  <ItemGroup>
+    <InternalsVisibleTo Include="ThixShot.CaptureSmoke" />
+    <PackageReference Include="Vortice.MediaFoundation" Version="3.8.3" />
+    <PackageReference Include="NAudio.Wasapi" Version="3.3.0" />
+  </ItemGroup>
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+    <_CaptureArch Condition="'$(RuntimeIdentifier)' == 'osx-x64'">x86_64</_CaptureArch>
+    <_CaptureArch Condition="'$(RuntimeIdentifier)' == 'osx-arm64'">arm64</_CaptureArch>
+    <_CaptureTarget Condition="'$(_CaptureArch)' != ''">-target $(_CaptureArch)-apple-macos14.0</_CaptureTarget>
+    <_CaptureDir>$(BaseIntermediateOutputPath)capture/$(Configuration)/$(RuntimeIdentifier)</_CaptureDir>
+    <_CaptureSource>$(MSBuildThisFileDirectory)ThixShotCapture.swift</_CaptureSource>
+  </PropertyGroup>
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+    <None Include="$(_CaptureDir)/ThixShotCapture" Link="ThixShotCapture" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+  </ItemGroup>
+  <Target Name="CompileCaptureHelper" BeforeTargets="PrepareForBuild" Condition="$([MSBuild]::IsOSPlatform('OSX'))" Inputs="$(_CaptureSource)" Outputs="$(_CaptureDir)/ThixShotCapture">
+    <MakeDir Directories="$(_CaptureDir)" />
+    <Exec Command="MACOSX_DEPLOYMENT_TARGET=14.0 xcrun swiftc -swift-version 5 -O -parse-as-library $(_CaptureTarget) &quot;$(_CaptureSource)&quot; -o &quot;$(_CaptureDir)/ThixShotCapture&quot;" />
+  </Target>
+</Project>

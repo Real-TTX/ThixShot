@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/ThixShot/ThixShot.csproj" />
+  <Project Path="tests/ThixShot.CaptureSmoke/ThixShot.CaptureSmoke.csproj" />
+  <Project Path="tests/ThixShot.Tests/ThixShot.Tests.csproj" />
+</Solution>

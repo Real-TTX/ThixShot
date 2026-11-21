@@ -1,0 +1,160 @@
+name: ThixShot Desktop
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.metadata.outputs.channel }}
+      date: ${{ steps.metadata.outputs.date }}
+      version: ${{ steps.metadata.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: metadata
+        shell: pwsh
+        run: |
+          $channel = switch ($env:GITHUB_REF) {
+            'refs/heads/main' { 'release' }
+            'refs/heads/dev' { 'nightly' }
+            default { 'local' }
+          }
+          $date = [DateTime]::UtcNow.ToString('yyyyMMdd')
+          [xml] $props = Get-Content -Raw Directory.Build.props
+          $prefix = '{0}.{1}' -f $props.Project.PropertyGroup.ThixShotMajor, $props.Project.PropertyGroup.ThixShotMinor
+          $version = switch ($channel) {
+            release { "$prefix.$env:GITHUB_RUN_NUMBER-$date" }
+            nightly { "nightly-$env:GITHUB_RUN_NUMBER-$date" }
+            local   { "local-$date" }
+          }
+          "channel=$channel", "date=$date", "version=$version" >> $env:GITHUB_OUTPUT
+
+  package:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, rid: win-x64 }
+          - { os: macos-15, rid: osx-arm64 }
+          - { os: macos-15-intel, rid: osx-x64 }
+    runs-on: ${{ matrix.os }}
+    env:
+      CHANNEL: ${{ needs.version.outputs.channel }}
+      BUILD_DATE: ${{ needs.version.outputs.date }}
+      RID: ${{ matrix.rid }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Anwendungs- und Oberflächentests
+        run: dotnet test tests/ThixShot.Tests/ThixShot.Tests.csproj -c Release
+      - name: Windows-Medienexport prüfen
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (!(Get-WindowsFeature Server-Media-Foundation).Installed) {
+            Install-WindowsFeature Server-Media-Foundation -ErrorAction Stop
+          }
+          dotnet run --configuration Release --project tests/ThixShot.CaptureSmoke
+      - name: Windows-Setup erstellen
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/package-windows.ps1 -Channel $env:CHANNEL -BuildNumber $env:GITHUB_RUN_NUMBER -BuildDate $env:BUILD_DATE
+      - name: Installation und Deinstallation prüfen
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msi = (Resolve-Path 'artifacts/packages/ThixShot-win-x64.msi').Path
+          $target = Join-Path $env:LOCALAPPDATA 'Programs/ThixShot/ThixShot.exe'
+          $loginItems = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+          foreach ($mode in '/i', '/x') {
+            $installer = Start-Process msiexec.exe -ArgumentList "$mode `"$msi`" /qn /norestart" -Wait -PassThru
+            if ($installer.ExitCode -ne 0) { throw "MSI $mode fehlgeschlagen ($($installer.ExitCode))." }
+            if ((Test-Path $target) -ne ($mode -eq '/i')) { throw "Falscher Installationszustand bei $mode." }
+            if ($mode -eq '/i') {
+              $app = Start-Process $target -PassThru -WindowStyle Hidden
+              try {
+                if (!$app.WaitForInputIdle(30000) -or $app.HasExited) { throw 'Die installierte Anwendung startet nicht.' }
+              } finally {
+                if (!$app.HasExited) { $app.Kill(); $app.WaitForExit() }
+              }
+              if (!(Test-Path $loginItems)) { New-Item -Path $loginItems | Out-Null }
+              New-ItemProperty -Path $loginItems -Name ThixShot -Value ('"' + $target + '" --autostart') -Force | Out-Null
+            } elseif (Get-ItemPropertyValue -Path $loginItems -Name ThixShot -ErrorAction SilentlyContinue) {
+              throw 'Deinstallation hat den ThixShot-Autostart nicht entfernt.'
+            }
+          }
+      - name: macOS-App signieren und Disk-Image prüfen
+        if: runner.os == 'macOS'
+        run: bash scripts/package-macos.sh "$RID" "$CHANNEL" "$GITHUB_RUN_NUMBER" "$BUILD_DATE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ThixShot-${{ needs.version.outputs.version }}-${{ matrix.rid }}
+          path: artifacts/packages/
+          if-no-files-found: error
+
+  channel:
+    if: github.event_name == 'push' && needs.version.outputs.channel != 'local'
+    needs: [version, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: thixshot-publish-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      CHANNEL: ${{ needs.version.outputs.channel }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ThixShot-*
+          merge-multiple: true
+          path: packages
+      - name: Update-Manifest und Release veröffentlichen
+        shell: bash
+        working-directory: packages
+        run: |
+          set -euo pipefail
+          tag="${CHANNEL}-channel"
+          sha() { sha256sum "$1" | cut -d' ' -f1; }
+          jq -n --arg version "$VERSION" --arg channel "$CHANNEL" --argjson build "$GITHUB_RUN_NUMBER" \
+            --arg win "$(sha ThixShot-win-x64.msi)" --arg arm "$(sha ThixShot-osx-arm64.zip)" \
+            --arg intel "$(sha ThixShot-osx-x64.zip)" \
+            '{version:$version,channel:$channel,buildNumber:$build,packages:{
+              "win-x64":{file:"ThixShot-win-x64.msi",sha256:$win},
+              "osx-arm64":{file:"ThixShot-osx-arm64.zip",sha256:$arm},
+              "osx-x64":{file:"ThixShot-osx-x64.zip",sha256:$intel}}}' > thixshot-update.json
+
+          if [[ "$CHANNEL" == release ]] && ! gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release create "v$VERSION" --target "$GITHUB_SHA" --title "ThixShot $VERSION" \
+              --notes "Windows x64, macOS Apple Silicon und macOS Intel." *.msi *.dmg
+          fi
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --target "$GITHUB_SHA" --title "ThixShot $CHANNEL" \
+              --notes "Aktuelle Installationspakete und OTA-Manifest für den $CHANNEL-Kanal." --prerelease --latest=false
+          else
+            asset="$(gh release view "$tag" --json assets --jq '.assets[] | select(.name=="thixshot-update.json") | .name')"
+            if [[ -n "$asset" ]]; then
+              gh release download "$tag" --pattern "$asset" --dir "$RUNNER_TEMP/prior"
+              prior="$(jq -er '.buildNumber' "$RUNNER_TEMP/prior/$asset")"
+              if (( prior >= GITHUB_RUN_NUMBER )); then exit 0; fi
+            fi
+          fi
+          gh release upload "$tag" *.msi *.zip *.dmg --clobber
+          gh release upload "$tag" thixshot-update.json --clobber

@@ -1,0 +1,13 @@
+**/bin/
+**/obj/
+.vs/
+.idea/
+artifacts/
+publish/
+TestResults/
+*.user
+*.suo
+*.pfx
+*.pem
+.DS_Store
+Thumbs.db

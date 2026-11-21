@@ -1,0 +1,35 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="ThixShot" Manufacturer="Matthias Schmoldt" Version="$(AppVersion)"
+           UpgradeCode="B75BDAC5-9408-45CC-B1BE-0AE9049DD8C0" Scope="perUser" Language="1031">
+    <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="Eine neuere Version von ThixShot ist bereits installiert." />
+    <MediaTemplate EmbedCab="yes"/>
+    <Icon Id="ThixShotIcon" SourceFile="$(sys.SOURCEFILEDIR)..\..\src\ThixShot\Assets\ThixShot.ico" />
+    <Property Id="ARPPRODUCTICON" Value="ThixShotIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://thixapps.de" />
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="Programs" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="ThixShot">
+          <Component Id="Application" Guid="8DBD0317-66D1-4D41-B62A-31D6D0DF802B">
+            <File Id="ThixShotExe" Source="!(bindpath.payload)\ThixShot.exe"/>
+            <Shortcut Id="LaunchThixShot" Directory="ProgramMenuFolder" Name="ThixShot"
+                      Target="[#ThixShotExe]" WorkingDirectory="INSTALLFOLDER" Icon="ThixShotIcon"/>
+            <RemoveFolder Id="CleanInstallDirectory" On="uninstall"/>
+            <RegistryValue Root="HKCU" Key="Software\ThixApps\ThixShot\Installer" Name="Installed"
+                           Type="integer" Value="1" KeyPath="yes"/>
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder"/>
+    <StandardDirectory Id="System64Folder"/>
+    <CustomAction Id="CleanLoginItem" Directory="System64Folder" Execute="commit" Impersonate="yes" Return="ignore"
+                  ExeCommand="&quot;[System64Folder]reg.exe&quot; delete &quot;HKCU\Software\Microsoft\Windows\CurrentVersion\Run&quot; /v ThixShot /f"/>
+    <InstallExecuteSequence>
+      <Custom Action="CleanLoginItem" Before="InstallFinalize" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE"/>
+    </InstallExecuteSequence>
+    <Feature Id="Main" Title="ThixShot" Level="1">
+      <ComponentRef Id="Application"/>
+    </Feature>
+  </Package>
+</Wix>

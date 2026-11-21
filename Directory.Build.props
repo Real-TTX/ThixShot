@@ -1,0 +1,25 @@
+<Project>
+  <PropertyGroup>
+    <ThixShotMajor>0</ThixShotMajor>
+    <ThixShotMinor>1</ThixShotMinor>
+    <Channel Condition="'$(Channel)' == ''">local</Channel>
+    <BuildNumber Condition="'$(BuildNumber)' == ''">0</BuildNumber>
+    <BuildDate Condition="'$(BuildDate)' == ''">$([System.DateTime]::UtcNow.ToString('yyyyMMdd'))</BuildDate>
+
+    <Version>$(ThixShotMajor).$(ThixShotMinor).$(BuildNumber)</Version>
+    <AssemblyVersion>$(ThixShotMajor).$(ThixShotMinor).0.0</AssemblyVersion>
+    <FileVersion>$(Version).0</FileVersion>
+    <InformationalVersion Condition="'$(Channel)' == 'release'">$(Version)-$(BuildDate)</InformationalVersion>
+    <InformationalVersion Condition="'$(Channel)' == 'nightly'">nightly-$(BuildNumber)-$(BuildDate)</InformationalVersion>
+    <InformationalVersion Condition="'$(Channel)' == 'local'">local-$(BuildDate)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Authors>Matthias Schmoldt</Authors>
+    <Company>Matthias Schmoldt</Company>
+    <Product>ThixShot</Product>
+    <Copyright>© Matthias Schmoldt</Copyright>
+  </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="ThixShotChannel" Value="$(Channel)" />
+    <AssemblyMetadata Include="ThixShotBuildNumber" Value="$(BuildNumber)" />
+  </ItemGroup>
+</Project>

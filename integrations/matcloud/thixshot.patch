@@ -1,0 +1,130 @@
+diff --git a/src/MatCloud.Contract/CloudContract.cs b/src/MatCloud.Contract/CloudContract.cs
+index be720cf..20a82af 100644
+--- a/src/MatCloud.Contract/CloudContract.cs
++++ b/src/MatCloud.Contract/CloudContract.cs
+@@ -92,6 +92,7 @@ public static class CloudApps
+     public const string Tunnel = "tunnel";
+     public const string Launcher = "launcher";
+     public const string Fred = "fred";
++    public const string Shot = "shot";
+ 
+     public static readonly IReadOnlyList<CloudApp> All =
+     [
+@@ -104,6 +105,7 @@ public static class CloudApps
+         new(Show, "ThixShow", "Präsentationen: Foliensätze in der Ablage öffnen und speichern"),
+         new(Tunnel, "ThixTunnel", "Verbindungen und Profile auf allen Geräten"),
+         new(Launcher, "ThixLauncher", "Die Thix-Apps und ihre Einstellungen"),
++        new(Shot, "ThixShot", "Screenshots und Bildschirmaufnahmen in der Ablage speichern"),
+         new(Fred, "ThixFred", "Der Launcher: Einstellungen, Themes, Websuchen, Skripte und Plugins"),
+     ];
+ 
+diff --git a/src/MatCloud.Contract/Drive/DriveContract.cs b/src/MatCloud.Contract/Drive/DriveContract.cs
+index 7c042cf..669e697 100644
+--- a/src/MatCloud.Contract/Drive/DriveContract.cs
++++ b/src/MatCloud.Contract/Drive/DriveContract.cs
+@@ -22,7 +22,7 @@ namespace MatCloud.Contract.Drive;
+ public static class DriveContract
+ {
+     /// <summary>The apps whose devices may use the Drive besides ThixDrive's own: the office apps open and save their documents here.</summary>
+-    public static readonly IReadOnlyList<string> GuestApps = [CloudApps.Write, CloudApps.Calc, CloudApps.Show];
++    public static readonly IReadOnlyList<string> GuestApps = [CloudApps.Write, CloudApps.Calc, CloudApps.Show, CloudApps.Shot];
+ 
+     public const string Root = "/api/v1/drive";
+ 
+diff --git a/src/MatCloud.Contract/MatCloud.Contract.csproj b/src/MatCloud.Contract/MatCloud.Contract.csproj
+index b6c53e8..8fd61e5 100644
+--- a/src/MatCloud.Contract/MatCloud.Contract.csproj
++++ b/src/MatCloud.Contract/MatCloud.Contract.csproj
+@@ -8,7 +8,7 @@
+   -->
+   <PropertyGroup>
+     <RootNamespace>MatCloud.Contract</RootNamespace>
+-    <MatCloudContractVersion>1.4.0</MatCloudContractVersion>
++    <MatCloudContractVersion>1.4.1</MatCloudContractVersion>
+   </PropertyGroup>
+ 
+ </Project>
+diff --git a/src/Apps/MatCloud.Apps.Drive/Business/DriveAccess.cs b/src/Apps/MatCloud.Apps.Drive/Business/DriveAccess.cs
+index eb668b3..1f4912c 100644
+--- a/src/Apps/MatCloud.Apps.Drive/Business/DriveAccess.cs
++++ b/src/Apps/MatCloud.Apps.Drive/Business/DriveAccess.cs
+@@ -65,7 +65,7 @@ public static class DriveAccess
+     {
+         if (!actor.MayUse(CloudApps.Drive))
+         {
+-            throw new NotAllowedException($"Die Ablage ist für ThixDrive, ThixWrite, ThixCalc und ThixShow; dieses Gerät ist für {CloudApps.NameOf(actor.App)} angemeldet.");
++            throw new NotAllowedException($"Die Ablage ist für ThixDrive, ThixWrite, ThixCalc, ThixShow und ThixShot; dieses Gerät ist für {CloudApps.NameOf(actor.App)} angemeldet.");
+         }
+ 
+         if (!await AppService.IsEnabledAsync(db, CloudApps.Drive, ct))
+diff --git a/tests/MatCloud.Tests/DriveApiTests.cs b/tests/MatCloud.Tests/DriveApiTests.cs
+index 864e18e..6a5d012 100644
+--- a/tests/MatCloud.Tests/DriveApiTests.cs
++++ b/tests/MatCloud.Tests/DriveApiTests.cs
+@@ -106,7 +106,7 @@ public sealed class DriveApiTests
+         await using var app = TestApp.Create(test);
+         var ct = CancellationToken.None;
+ 
+-        foreach (var appId in new[] { CloudApps.Drive, CloudApps.Write, CloudApps.Calc, CloudApps.Show })
++        foreach (var appId in new[] { CloudApps.Drive, CloudApps.Write, CloudApps.Calc, CloudApps.Show, CloudApps.Shot })
+         {
+             using var client = await ClientAsync(app, appId);
+             await client.CreateDriveFolderAsync(null, appId, ct);
+@@ -126,7 +126,7 @@ public sealed class DriveApiTests
+         Assert.Equal(HttpStatusCode.Forbidden, (await drive.GetAsync(Contract.Clip.ClipContract.Settings)).StatusCode);
+ 
+         using var write = await ClientAsync(app, CloudApps.Write);
+-        Assert.Equal(4, (await write.ListDriveFolderAsync(null, ct)).Total);
++        Assert.Equal(5, (await write.ListDriveFolderAsync(null, ct)).Total);
+         Assert.True((await AppService.SetEnabledAsync(test.NewContext(), new Actor(admin.Id, true), CloudApps.Drive, false)).Ok);
+         var off = await Assert.ThrowsAsync<CloudException>(() => write.ListDriveFolderAsync(null, ct));
+         Assert.Equal(HttpStatusCode.Forbidden, off.StatusCode);
+@@ -135,7 +135,7 @@ public sealed class DriveApiTests
+         // ThixWrite itself is still on: its account and its general sync work
+         Assert.Equal(CloudApps.Write, (await write.GetAccountAsync(ct)).App);
+         Assert.True((await AppService.SetEnabledAsync(test.NewContext(), new Actor(admin.Id, true), CloudApps.Drive, true)).Ok);
+-        Assert.Equal(4, (await write.ListDriveFolderAsync(null, ct)).Total);
++        Assert.Equal(5, (await write.ListDriveFolderAsync(null, ct)).Total);
+     }
+ 
+     [DbFact]
+diff --git a/tests/MatCloud.Tests/DriveTests.cs b/tests/MatCloud.Tests/DriveTests.cs
+index b6a76d4..610eefc 100644
+--- a/tests/MatCloud.Tests/DriveTests.cs
++++ b/tests/MatCloud.Tests/DriveTests.cs
+@@ -105,7 +105,7 @@ public sealed class DriveTests
+         var admin = await test.AddUserAsync("admin", admin: true);
+         var store = NewStore();
+ 
+-        foreach (var app in new[] { CloudApps.Drive, CloudApps.Write, CloudApps.Calc, CloudApps.Show })
++        foreach (var app in new[] { CloudApps.Drive, CloudApps.Write, CloudApps.Calc, CloudApps.Show, CloudApps.Shot })
+         {
+             var item = await UploadAsync(test.NewContext(), store, Device(anna, app), null, $"Von {app}.txt", app);
+             var version = (await DriveFiles.VersionsAsync(test.NewContext(), Browser(anna), item.Id)).Value!.Versions.Single();
+@@ -123,7 +123,7 @@ public sealed class DriveTests
+         await Assert.ThrowsAsync<NotAllowedException>(() => DriveItems.ListAsync(test.NewContext(), Device(anna, CloudApps.Write), null, new DriveQuery()));
+         await Assert.ThrowsAsync<NotAllowedException>(() => DriveItems.RecentAsync(test.NewContext(), Browser(anna), 10));
+         Assert.True((await AppService.SetEnabledAsync(test.NewContext(), Browser(admin), CloudApps.Drive, true)).Ok);
+-        Assert.Equal(4, (await DriveItems.ListAsync(test.NewContext(), Device(anna, CloudApps.Calc), null, new DriveQuery())).Value!.Total);
++        Assert.Equal(5, (await DriveItems.ListAsync(test.NewContext(), Device(anna, CloudApps.Calc), null, new DriveQuery())).Value!.Total);
+     }
+ 
+     [DbFact]
+diff --git a/tests/MatCloud.Tests/DriveUnitTests.cs b/tests/MatCloud.Tests/DriveUnitTests.cs
+index cbf370a..a78678a 100644
+--- a/tests/MatCloud.Tests/DriveUnitTests.cs
++++ b/tests/MatCloud.Tests/DriveUnitTests.cs
+@@ -71,11 +71,11 @@ public sealed class DriveUnitTests
+     [Fact]
+     public void The_grant_lets_exactly_the_office_apps_into_the_Drive_and_nowhere_else()
+     {
+-        Assert.Equal([CloudApps.Write, CloudApps.Calc, CloudApps.Show], DriveContract.GuestApps);
++        Assert.Equal([CloudApps.Write, CloudApps.Calc, CloudApps.Show, CloudApps.Shot], DriveContract.GuestApps);
+         foreach (var app in CloudApps.All.Select(a => a.Id))
+         {
+             var device = new Actor(1, false, 2, "PC", app);
+-            Assert.Equal(app is CloudApps.Drive or CloudApps.Write or CloudApps.Calc or CloudApps.Show, device.MayUse(CloudApps.Drive));
++            Assert.Equal(app is CloudApps.Drive or CloudApps.Write or CloudApps.Calc or CloudApps.Show or CloudApps.Shot, device.MayUse(CloudApps.Drive));
+             Assert.Equal(app == CloudApps.Clip, device.MayUse(CloudApps.Clip));
+             Assert.Equal(app == CloudApps.Note, device.MayUse(CloudApps.Note));
+         }

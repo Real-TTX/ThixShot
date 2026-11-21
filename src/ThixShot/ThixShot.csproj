@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationIcon>Assets/ThixShot.ico</ApplicationIcon>
+    <AssemblyName>ThixShot</AssemblyName>
+    <Authors>Matthias Schmoldt</Authors>
+    <AvaloniaVersion>11.3.22</AvaloniaVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Desktop" Version="$(AvaloniaVersion)" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="$(AvaloniaVersion)" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.15" />
+    <AvaloniaResource Include="Assets/**" />
+    <InternalsVisibleTo Include="ThixShot.Tests" />
+  </ItemGroup>
+  <Import Project="../../native/Capture.targets" Condition="Exists('../../native/Capture.targets')" />
+</Project>

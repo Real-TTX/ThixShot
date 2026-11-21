@@ -107,7 +107,7 @@ jobs:
           if-no-files-found: error
 
   channel:
-    if: github.event_name == 'push' && needs.version.outputs.channel != 'local'
+    if: github.event_name != 'pull_request' && needs.version.outputs.channel != 'local'
     needs: [version, package]
     runs-on: ubuntu-latest
     permissions:

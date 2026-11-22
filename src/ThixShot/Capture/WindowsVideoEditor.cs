@@ -76,13 +76,20 @@ internal static class WindowsVideoEditor
             try
             {
                 using var attributes = MediaFactory.MFCreateAttributes(1);
-                attributes.Set(SourceReaderAttributeKeys.EnableVideoProcessing, 1u);
+                // The legacy RGB converter can expose an aligned codec surface as a flat
+                // buffer while advertising the visible width. The video processor exposes
+                // its actual row pitch through IMF2DBuffer.
+                attributes.Set(SourceReaderAttributeKeys.EnableAdvancedVideoProcessing, 1u);
                 reader = MediaFactory.MFCreateSourceReaderFromURL(path, attributes);
                 reader.SetStreamSelection(SourceReaderIndex.AllStreams, false);
                 reader.SetStreamSelection(SourceReaderIndex.FirstVideoStream, true);
+                using var native = reader.GetNativeMediaType(SourceReaderIndex.FirstVideoStream, 0);
+                ulong nativeDimensions = native.GetUInt64(MediaTypeAttributeKeys.FrameSize);
                 using var requested = MediaFactory.MFCreateMediaType();
                 requested.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
                 requested.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.Rgb32);
+                requested.Set(MediaTypeAttributeKeys.FrameSize, nativeDimensions);
+                requested.Set(MediaTypeAttributeKeys.DefaultStride, checked((uint)(nativeDimensions >> 32) * 4));
                 reader.SetCurrentMediaType(SourceReaderIndex.FirstVideoStream, requested);
                 using var format = reader.GetCurrentMediaType(SourceReaderIndex.FirstVideoStream);
                 ulong dimensions = format.GetUInt64(MediaTypeAttributeKeys.FrameSize);
@@ -131,28 +138,37 @@ internal static class WindowsVideoEditor
         {
             using var buffer = sample.ConvertToContiguousBuffer();
             using var twoD = buffer.QueryInterfaceOrNull<IMF2DBuffer>();
-            int pitch = stride;
-            nint row;
-            if (twoD != null) twoD.Lock2D(out row, out pitch);
-            else
+            if (twoD != null)
             {
-                buffer.Lock(out row, out _, out int length);
-                if ((long)Math.Abs(pitch) * (Info.Height - 1) + Info.Width * 4 > length)
-                {
-                    buffer.Unlock();
-                    throw new InvalidDataException("Das Videobild ist unvollständig.");
-                }
-                if (pitch < 0) row += (Info.Height - 1) * -pitch;
+                twoD.Lock2D(out var firstRow, out var actualPitch);
+                try { return CopyVisibleRows(firstRow, actualPitch); }
+                finally { twoD.Unlock2D(); }
             }
+
+            buffer.Lock(out var start, out _, out int length);
             try
             {
-                var bitmap = new SKBitmap(new SKImageInfo(Info.Width, Info.Height, SKColorType.Bgra8888, SKAlphaType.Opaque));
-                nint output = bitmap.GetPixels();
-                for (int y = 0; y < Info.Height; y++)
-                    CopyMemory(output + y * bitmap.RowBytes, row + y * pitch, (nuint)(Info.Width * 4));
-                return bitmap;
+                int rowBytes = checked(Info.Width * 4);
+                int pitch = stride;
+                if (length == (long)rowBytes * Info.Height) pitch = stride < 0 ? -rowBytes : rowBytes;
+                long spacing = Math.Abs((long)pitch);
+                long lastRow = spacing * (Info.Height - 1);
+                if (spacing < rowBytes || length < lastRow + rowBytes || length > lastRow + spacing)
+                    throw new InvalidDataException("Das Zeilenlayout des dekodierten Videobildes ist nicht eindeutig.");
+                return CopyVisibleRows(pitch < 0 ? start + checked((nint)lastRow) : start, pitch);
             }
-            finally { if (twoD != null) twoD.Unlock2D(); else buffer.Unlock(); }
+            finally { buffer.Unlock(); }
+        }
+
+        private SKBitmap CopyVisibleRows(nint firstRow, int pitch)
+        {
+            int rowBytes = checked(Info.Width * 4);
+            if (Math.Abs((long)pitch) < rowBytes) throw new InvalidDataException("Die dekodierte Bildzeile ist zu kurz.");
+            var bitmap = new SKBitmap(new SKImageInfo(Info.Width, Info.Height, SKColorType.Bgra8888, SKAlphaType.Opaque));
+            nint output = bitmap.GetPixels();
+            for (int y = 0; y < Info.Height; y++)
+                CopyMemory(output + (nint)y * bitmap.RowBytes, firstRow + (nint)y * pitch, (nuint)rowBytes);
+            return bitmap;
         }
         public void Dispose()
         {

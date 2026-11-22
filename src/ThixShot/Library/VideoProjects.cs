@@ -10,7 +10,10 @@ internal static class VideoProjects
 {
     private static string Root => Path.Combine(MediaLibrary.Folder, ".edits");
     private static string Metadata(string path) => Path.Combine(Root, Path.GetFileName(path) + ".json");
-    private static string Rendered(Guid revision) => Path.Combine(Root, revision.ToString("N") + ".mp4");
+    private static string UnversionedRender(Guid revision) => Path.Combine(Root, $"{revision:N}.mp4");
+    // Windows renders produced before the stride correction may contain skewed frames.
+    private static string WindowsRender(Guid revision) => Path.Combine(Root, $"{revision:N}.win-mf-v2.mp4");
+    private static string Rendered(Guid revision) => OperatingSystem.IsWindows() ? WindowsRender(revision) : UnversionedRender(revision);
 
     public static VideoProject Read(string path)
     {
@@ -58,16 +61,21 @@ internal static class VideoProjects
         var project = Read(path);
         if (project.Zooms.Length == 0) return path;
         string rendered = Rendered(project.Revision);
-        if (File.Exists(rendered)) return rendered;
+        if (File.Exists(rendered))
+        {
+            if (OperatingSystem.IsWindows()) TryDeleteRender(UnversionedRender(project.Revision));
+            return rendered;
+        }
         string tmp = MediaLibrary.TemporaryFile(".mp4");
         try
         {
             await VideoEditService.ExportAsync(path, tmp, project.Zooms, progress, ct).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
-            using var writeLock = Acquire();
+            using var writeLock = await AcquireForRenderAsync(ct).ConfigureAwait(false);
             if (Read(path).Revision != project.Revision)
                 throw new IOException("Die Zoomeinstellungen wurden während des Renderns geändert.");
             if (!File.Exists(rendered)) File.Move(tmp, rendered);
+            if (OperatingSystem.IsWindows()) TryDeleteRender(UnversionedRender(project.Revision));
             return rendered;
         }
         finally { File.Delete(tmp); }
@@ -93,8 +101,27 @@ internal static class VideoProjects
     private static void RemoveCache(Guid revision)
     {
         if (revision == Guid.Empty) return;
-        try { File.Delete(Rendered(revision)); }
-        catch (IOException) { /* A player can still have this superseded render open. */ }
+        TryDeleteRender(UnversionedRender(revision));
+        TryDeleteRender(WindowsRender(revision));
+    }
+    private static void TryDeleteRender(string file)
+    {
+        try { File.Delete(file); }
+        catch (IOException) { /* An older application or player can still be using the render. */ }
+        catch (UnauthorizedAccessException) { /* Removing an obsolete cache is optional. */ }
+    }
+    private static async Task<FileStream> AcquireForRenderAsync(CancellationToken ct)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            try { return Acquire(); }
+            catch (IOException ex) when (attempt < 100 && (ex.HResult & 0xffff) is 11 or 32 or 33 or 35)
+            {
+                // Another app instance is committing an edit or the same render.
+                await Task.Delay(40, ct).ConfigureAwait(false);
+            }
+        }
     }
     private static string RequireVideo(string path)
     {

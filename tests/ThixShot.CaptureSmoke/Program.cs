@@ -11,7 +11,10 @@ namespace ThixShot.CaptureSmoke;
 [SupportedOSPlatform("windows")]
 internal static class Program
 {
-    private const int Width = 320, Height = 180, FrameRate = 30, SampleRate = 48_000;
+    // A real region size. Both H.264 decoder height and RGB row pitch require alignment.
+    private const int Width = 620, Height = 1080, FrameRate = 30, SampleRate = 48_000;
+    private const int StripeStart = 67, StripeWidth = 22;
+    private static readonly int[] MarkerRows = [41, 193, 402, 751, 999];
 
     private static async Task Main()
     {
@@ -41,14 +44,23 @@ internal static class Program
             var info = await VideoEditService.InspectAsync(source);
             if (info.Width != Width || info.Height != Height || Math.Abs(info.DurationSeconds - 1) > 0.05)
                 throw new InvalidDataException("Unexpected source metadata.");
-            var points = new[] { new ZoomPoint(0, 1, .5, .12, 2) };
+            var points = new[] { new ZoomPoint(.1, .8, .5, .12, 2) };
             await VideoEditService.ExportAsync(source, zoomed, points);
             using var original = SKBitmap.Decode(await VideoEditService.FrameAsync(source, .5));
             using var cropped = SKBitmap.Decode(await VideoEditService.FrameAsync(zoomed, .5));
             var before = original.GetPixel(Width / 2, Height - 20);
             var after = cropped.GetPixel(Width / 2, Height - 20);
+            foreach (var y in MarkerRows)
+            {
+                var stripe = original.GetPixel(StripeStart + StripeWidth / 2, y);
+                var background = original.GetPixel(StripeStart + StripeWidth + 6, y);
+                if (stripe.Green < 180 || background.Green > 70)
+                    throw new InvalidDataException($"The source preview displaced the vertical marker at row {y}.");
+            }
             if (before.Red < 180 || before.Blue > 80 || after.Blue < 180 || after.Red > 80)
                 throw new InvalidDataException("The zoom must move the upper blue half into the bottom of the exported frame.");
+            // Decode the unzoomed opening frames independently of the editor's RGB converter.
+            VerifyDecodedVideo(zoomed);
             VerifyDecodedAudio(zoomed);
         }
         finally { File.Delete(zoomed); }
@@ -66,6 +78,9 @@ internal static class Program
             bool top = offset < pixels.Length / 2;
             pixels[offset] = top ? (byte)238 : (byte)16;
             pixels[offset + 2] = top ? (byte)32 : (byte)226;
+            int x = offset / 4 % Width;
+            if (x >= StripeStart && x < StripeStart + StripeWidth)
+                pixels[offset] = pixels[offset + 1] = pixels[offset + 2] = 240;
         }
         var stereo = new byte[SampleRate / FrameRate * 4];
         for (int frame = 0; frame < FrameRate; frame++)
@@ -101,17 +116,40 @@ internal static class Program
         raw.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
         raw.Set(MediaTypeAttributeKeys.Subtype, new Guid("3231564E-0000-0010-8000-00AA00389B71")); // NV12
         reader.SetCurrentMediaType(SourceReaderIndex.FirstVideoStream, raw);
-        using var sample = reader.ReadSample(SourceReaderIndex.FirstVideoStream, 0, out _, out _, out _);
+        using var format = reader.GetCurrentMediaType(SourceReaderIndex.FirstVideoStream);
+        if (format.GetUInt64(MediaTypeAttributeKeys.FrameSize) != ((ulong)Width << 32 | Height))
+            throw new InvalidDataException("The visible recording dimensions changed.");
+        for (int i = 0; i < 3; i++)
+        {
+            using var sample = reader.ReadSample(SourceReaderIndex.FirstVideoStream, 0, out _, out _, out long time);
+            if (sample == null || time >= TimeSpan.TicksPerSecond / 10)
+                throw new InvalidDataException("An opening frame is missing before the first zoom.");
+            VerifyMarkerPositions(sample);
+        }
+    }
+
+    private static void VerifyMarkerPositions(IMFSample sample)
+    {
         using var frame = sample.ConvertToContiguousBuffer();
-        frame.Lock(out var pixels, out _, out var length);
+        using var plane = frame.QueryInterfaceOrNull<IMF2DBuffer>();
+        nint pixels;
+        int pitch = Width;
+        if (plane != null) plane.Lock2D(out pixels, out pitch);
+        else frame.Lock(out pixels, out _, out _);
         try
         {
-            if (length < Width * Height) throw new InvalidDataException("The decoded video frame is incomplete.");
-            int topLuma = Marshal.ReadByte(pixels, 20 * Width + Width / 2);
-            int bottomLuma = Marshal.ReadByte(pixels, 160 * Width + Width / 2);
+            if (pitch < Width || frame.CurrentLength < Width * Height) throw new InvalidDataException("The decoded video frame is incomplete.");
+            int topLuma = Marshal.ReadByte(pixels, 20 * pitch + Width / 2);
+            int bottomLuma = Marshal.ReadByte(pixels, (Height - 20) * pitch + Width / 2);
             if (bottomLuma - topLuma < 15) throw new InvalidDataException("Unexpected video colors or orientation.");
+            foreach (var y in MarkerRows)
+            {
+                int stripe = Marshal.ReadByte(pixels, y * pitch + StripeStart + StripeWidth / 2);
+                int background = Marshal.ReadByte(pixels, y * pitch + StripeStart + StripeWidth + 6);
+                if (stripe - background < 80) throw new InvalidDataException($"The encoded vertical marker moved at row {y}.");
+            }
         }
-        finally { frame.Unlock(); }
+        finally { if (plane != null) plane.Unlock2D(); else frame.Unlock(); }
     }
 
     private static void VerifyDecodedAudio(string path)

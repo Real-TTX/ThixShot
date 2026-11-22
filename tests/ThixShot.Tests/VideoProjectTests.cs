@@ -43,6 +43,51 @@ public sealed class VideoProjectTests
     }
 
     [AvaloniaFact]
+    public async Task Playback_uses_the_current_renderer_and_preserves_the_master_and_zoom_revision()
+    {
+        var path = NewDemo();
+        try
+        {
+            var original = File.ReadAllBytes(path);
+            var point = new ZoomPoint(1, 2, .5, .5, 1.55);
+            var project = VideoProjects.Save(path, VideoProjects.Read(path), [point], true);
+            var directory = Path.Combine(MediaLibrary.Folder, ".edits");
+            var oldRender = Path.Combine(directory, $"{project.Revision:N}.mp4");
+            File.WriteAllBytes(oldRender, [1, 2, 3]);
+
+            if (OperatingSystem.IsWindows())
+            {
+                using var canceled = new CancellationTokenSource();
+                canceled.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                    VideoProjects.PlaybackPathAsync(path, null, canceled.Token));
+                Assert.True(File.Exists(oldRender));
+                var corrected = Path.Combine(directory, $"{project.Revision:N}.win-mf-v2.mp4");
+                File.WriteAllBytes(corrected, [4, 5, 6]);
+                Assert.Equal(corrected, await VideoProjects.PlaybackPathAsync(path, null, default));
+                Assert.False(File.Exists(oldRender));
+                // Older builds may regenerate their unversioned cache after the upgrade.
+                File.WriteAllBytes(oldRender, [7, 8, 9]);
+                Assert.Equal(corrected, await VideoProjects.PlaybackPathAsync(path, null, default));
+                Assert.Equal(new byte[] { 4, 5, 6 }, File.ReadAllBytes(corrected));
+                Assert.False(File.Exists(oldRender));
+            }
+            else
+            {
+                Assert.Equal(oldRender, await VideoProjects.PlaybackPathAsync(path, null, default));
+                Assert.True(File.Exists(oldRender));
+            }
+            var after = VideoProjects.Read(path);
+            Assert.Equal(project.Revision, after.Revision);
+            Assert.Equal(point, Assert.Single(after.Zooms));
+            Assert.Equal(original, File.ReadAllBytes(path));
+            VideoProjects.Save(path, after, []);
+            Assert.Empty(Directory.EnumerateFiles(directory, $"{project.Revision:N}*.mp4"));
+        }
+        finally { MediaLibrary.Delete(path); }
+    }
+
+    [AvaloniaFact]
     public async Task Editor_adds_a_zoom_at_the_playhead_and_saves_the_new_project()
     {
         var path = NewDemo();

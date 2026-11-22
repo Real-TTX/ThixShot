@@ -58,9 +58,9 @@ public static class CaptureService
             try
             {
                 if (OperatingSystem.IsWindows())
-                    WindowsRecording.Record(temporaryPath, options, session.StopSignal.Task, ready);
+                    session.ZoomPoints = WindowsRecording.Record(temporaryPath, options, session.StopSignal.Task, ready);
                 else
-                    await MacCapture.RecordAsync(temporaryPath, options, session.StopSignal.Task, ready).ConfigureAwait(false);
+                    session.ZoomPoints = await MacCapture.RecordAsync(temporaryPath, options, session.StopSignal.Task, ready).ConfigureAwait(false);
 
                 if (!session.StopSignal.Task.IsCompleted)
                     throw new IOException("Die Bildschirmaufnahme wurde unerwartet beendet.");
@@ -121,6 +121,7 @@ public sealed class RecordingSession : IAsyncDisposable
     internal RecordingSession() { }
     internal TaskCompletionSource<bool> StopSignal { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public Task Completion { get; internal set; } = Task.CompletedTask;
+    public IReadOnlyList<ZoomPoint> ZoomPoints { get; internal set; } = [];
 
     public Task StopAsync()
     {

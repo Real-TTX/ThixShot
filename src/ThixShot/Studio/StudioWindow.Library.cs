@@ -2,12 +2,12 @@ using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Input;
-using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using MatDesktop;
+using ThixShot.Editor;
 using ThixShot.Integration;
 using ThixShot.Library;
 
@@ -60,9 +60,11 @@ internal sealed partial class StudioWindow
             var facts = new MatFacts { LabelWidth = 105, Facts = [new("Format", item.IsVideo ? "MP4" : "PNG"),
                 new("Erstellt", item.Created.ToString("g")), new("Dateigröße", $"{item.Bytes:N0} Bytes")] };
             var title = new TextBlock { Text = item.Title, TextWrapping = TextWrapping.Wrap }.Themed("MatText.SectionTitle");
-            pane.Child = Ui.Stack(14, title, preview, Ui.Row(8, Ui.Button(item.IsVideo ? "Abspielen" : "Bearbeiten",
-                item.IsVideo ? "play" : "edit", () => Run(() => MediaActionAsync(item, "open")), "primary"),
-                Ui.Button("Exportieren", "download", () => Run(() => MediaActionAsync(item, "export")))), facts);
+            var actions = Ui.Row(8, Ui.Button(item.IsVideo ? "Video bearbeiten" : "Bearbeiten", "edit",
+                () => Run(() => MediaActionAsync(item, item.IsVideo ? "edit-video" : "open")), "primary"));
+            actions.Children.Add(item.IsVideo ? Ui.Button("Abspielen", "play", () => Run(() => MediaActionAsync(item, "open"))) :
+                Ui.Button("Exportieren", "download", () => Run(() => MediaActionAsync(item, "export"))));
+            pane.Child = Ui.Stack(14, title, preview, actions, facts);
         }
         list.SelectionChanged += (_, _) => ShowSelected();
         list.DoubleTapped += (_, _) => OpenSelected();
@@ -165,7 +167,9 @@ internal sealed partial class StudioWindow
         var open = Ui.Button(item.IsVideo ? "Abspielen" : "Bearbeiten", item.IsVideo ? "play" : "edit", () => dialog.Close("open"));
         var export = Ui.Button("Exportieren", "download", () => dialog.Close("export"));
         var cloud = Ui.Button("In ThixCloud sichern", "cloud", () => dialog.Close("cloud"));
-        var tools = Ui.Row(6, open, export, cloud);
+        var tools = Ui.Row(6);
+        if (item.IsVideo) tools.Children.Add(Ui.Button("Video bearbeiten", "edit", () => dialog.Close("edit-video")));
+        tools.Children.Add(open); tools.Children.Add(export); tools.Children.Add(cloud);
         if (!item.IsVideo) tools.Children.Add(Ui.Button("Kopieren", "copy", () => dialog.Close("copy")));
         body.Children.Add(tools);
         var remove = Ui.Button("Löschen", "trash", () => dialog.Close("delete")).Themed("MatButton.Danger");
@@ -185,7 +189,8 @@ internal sealed partial class StudioWindow
         var path = MediaLibrary.RequireItem(item.Path);
         switch (result)
         {
-            case "open" when item.IsVideo: MediaLibrary.OpenVideo(path); break;
+            case "edit-video": await EditVideoAsync(item); break;
+            case "open" when item.IsVideo: await PlayVideoAsync(item); break;
             case "open":
                 using (var source = File.OpenRead(MediaLibrary.RequireItem(path))) await EditAsync(source);
                 break;
@@ -196,7 +201,7 @@ internal sealed partial class StudioWindow
                 var local = destination.TryGetLocalPath();
                 if (local != null && string.Equals(Path.GetFullPath(local), path, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
                     break;
-                await using (var source = File.OpenRead(MediaLibrary.RequireItem(path)))
+                await using (var source = await MediaLibrary.OpenExportAsync(path, lifetime.Token))
                 await using (var target = await destination.OpenWriteAsync())
                 {
                     if (target.CanSeek) target.SetLength(0);
@@ -205,7 +210,7 @@ internal sealed partial class StudioWindow
                 ShowMessage("Aufnahme exportiert."); break;
             case "copy":
                 if (Clipboard == null) throw new InvalidOperationException("Zwischenablage nicht verfügbar.");
-                using (var image = new Bitmap(MediaLibrary.RequireItem(path))) await Clipboard.SetBitmapAsync(image);
+                await ImageOutput.CopyAsync(Clipboard, await File.ReadAllBytesAsync(MediaLibrary.RequireItem(path), lifetime.Token));
                 ShowMessage("Screenshot kopiert."); break;
             case "delete":
                 var content = Ui.Stack(14, new TextBlock { Text = "Aufnahme endgültig löschen?" }.Themed("MatText.SectionTitle"), Copy(item.Title));

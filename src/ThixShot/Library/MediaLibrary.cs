@@ -56,18 +56,26 @@ internal static class MediaLibrary
     {
         var source = RequireItem(path);
         var target = Resolve(title.Trim(), Path.GetExtension(source));
-        if (source != target) File.Move(source, target);
+        if (source == target) return;
+        if (IsVideo(source)) VideoProjects.Rename(source,target);
+        else File.Move(source,target);
     }
 
-    public static void Delete(string path) => File.Delete(RequireItem(path));
-
-    public static void OpenVideo(string path)
+    public static void Delete(string path)
     {
         var file = RequireItem(path);
-        if (!Path.GetExtension(file).Equals(".mp4", StringComparison.OrdinalIgnoreCase))
-            throw new IOException("Bitte ein Video auswählen.");
-        Process.Start(new ProcessStartInfo(file) { UseShellExecute = true });
+        if (IsVideo(file)) VideoProjects.Delete(file);
+        else File.Delete(file);
     }
+
+    public static async Task<FileStream> OpenExportAsync(string path, CancellationToken ct = default)
+    {
+        var file = RequireItem(path);
+        if (IsVideo(file)) file = await VideoProjects.PlaybackPathAsync(file,null,ct).ConfigureAwait(false);
+        return new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 81920, useAsync:true);
+    }
+
+    private static bool IsVideo(string path) => Path.GetExtension(path).Equals(".mp4",StringComparison.OrdinalIgnoreCase);
 
     private static string Resolve(string name, string extension)
     {

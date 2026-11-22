@@ -52,8 +52,9 @@ internal sealed partial class StudioWindow : MatWindow
             if (search.Length == 0 && current != destinations[1]) return;
             pageNumber = 0; current = destinations[1]; RefreshPage();
         };
-        var captureShortcut = OperatingSystem.IsMacOS() ? "⌘ + Enter" : "Strg + Enter";
-        var quickCapture = Ui.Button("Aufnehmen", "camera", () => Run(CaptureAsync));
+        var captureShortcut = OperatingSystem.IsMacOS() ? "⌘ + ⇧ + R" : "Strg + ⇧ + R";
+        var quickCapture = Ui.Button("Bereitschaft", "monitor", EnterReadyMode);
+        ToolTip.SetTip(quickCapture, "Schwebende Aufnahmeleiste am Bildschirmrand öffnen");
         var keys = new Border { Child = Ui.Text(captureShortcut,12), Padding = new Thickness(7,2),
             VerticalAlignment = VerticalAlignment.Center }.Themed("MatKeyCap");
         var topTools = Ui.Columns("*,Auto,Auto",globalSearch,quickCapture,keys); topTools.ColumnSpacing = 10;
@@ -102,6 +103,7 @@ internal sealed partial class StudioWindow : MatWindow
             switch (e.Key)
             {
                 case Key.Enter: Run(CaptureAsync); break;
+                case Key.R when e.KeyModifiers.HasFlag(KeyModifiers.Shift): EnterReadyMode(); break;
                 case Key.B: sidebar.IsFolded = !sidebar.IsFolded; break;
                 case Key.F: globalSearch.Focus(); globalSearch.SelectAll(); break;
                 default: return;
@@ -198,8 +200,10 @@ internal sealed partial class StudioWindow : MatWindow
         Grid.SetRow(library,3); main.Children.Add(library);
 
         var preview = new Border { Height = 148, CornerRadius = new CornerRadius(MatTokens.Size.RadiusLg),
-            ClipToBounds = true, Child = new StudioPreview { Region = region } };
-        var sample = Ui.Button("Beispielbild bearbeiten", "edit", () => Run(EditSampleAsync));
+            ClipToBounds = true, Child = new StudioPreview { Region = region, Video = video } };
+        var sample = video ? Ui.Button("Beispielvideo anlegen", "edit", () => Run(EditSampleVideoAsync)) :
+            Ui.Button("Beispielbild bearbeiten", "edit", () => Run(EditSampleAsync));
+        if (video) ToolTip.SetTip(sample,"Demo in die Mediathek übernehmen und ihre Zoomspur bearbeiten");
         sample.HorizontalAlignment = HorizontalAlignment.Left;
         var controls = Ui.Stack(12, preview, sample, Rule(),
             new TextBlock { Text = video ? "Videoaufnahme" : "Screenshot" }.Themed("MatText.SectionTitle"));
@@ -252,10 +256,10 @@ internal sealed partial class StudioWindow : MatWindow
         using var source = AssetLoader.Open(new Uri("avares://ThixShot/Assets/Studio.jpg"));
         await EditAsync(source, true);
     }
-    private async Task EditAsync(Stream source, bool sample = false)
+    private async Task EditAsync(Stream source, bool sample = false, Window? owner = null)
     {
         var editor = new EditorWindow(source, sample);
-        var path = await editor.ShowDialog<string?>(this);
+        var path = await editor.ShowDialog<string?>(owner ?? this);
         if (path != null) { selectedPath = path; ShowMessage($"Gespeichert · {Path.GetFileName(path)}"); }
     }
 }

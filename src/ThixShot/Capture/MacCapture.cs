@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text.Json;
 
 namespace ThixShot.Capture;
 
@@ -20,7 +21,7 @@ internal static class MacCapture
         }
     }
 
-    public static async Task RecordAsync(string path, RecordingOptions options, Task stop, TaskCompletionSource ready)
+    public static async Task<IReadOnlyList<ZoomPoint>> RecordAsync(string path, RecordingOptions options, Task stop, TaskCompletionSource ready)
     {
         var args = new List<string> { "record", path, Environment.ProcessId.ToString(CultureInfo.InvariantCulture),
             options.FocusZoom ? "1" : "0", options.ShowCursor ? "1" : "0", options.SystemAudio ? "1" : "0" };
@@ -41,6 +42,7 @@ internal static class MacCapture
                 throw new IOException("Die Bildschirmaufnahme konnte nicht gestartet werden.");
             }
             ready.TrySetResult();
+            var zooms = process.StandardOutput.ReadToEndAsync();
             if (await Task.WhenAny(stop, exit).ConfigureAwait(false) == stop && !process.HasExited)
             {
                 await process.StandardInput.WriteLineAsync("stop").ConfigureAwait(false);
@@ -48,6 +50,7 @@ internal static class MacCapture
             }
             await exit.WaitAsync(TimeSpan.FromSeconds(25)).ConfigureAwait(false);
             CheckResult(process, await error.ConfigureAwait(false));
+            return JsonSerializer.Deserialize<ZoomPoint[]>(await zooms.ConfigureAwait(false), JsonSerializerOptions.Web) ?? [];
         }
         finally
         {
@@ -55,7 +58,7 @@ internal static class MacCapture
         }
     }
 
-    private static Process Start(IEnumerable<string> args)
+    internal static Process Start(IEnumerable<string> args)
     {
         var info = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "ThixShotCapture"))
         {
@@ -65,7 +68,7 @@ internal static class MacCapture
         return Process.Start(info) ?? throw new IOException("Die macOS-Bildschirmaufnahme konnte nicht geöffnet werden.");
     }
 
-    private static void CheckResult(Process process, string message)
+    internal static void CheckResult(Process process, string message)
     {
         if (process.ExitCode == 0) return;
         if (process.ExitCode == 77)
@@ -73,7 +76,7 @@ internal static class MacCapture
         throw new IOException(string.IsNullOrWhiteSpace(message) ? "macOS hat die Bildschirmaufnahme unterbrochen." : message.Trim());
     }
 
-    private static void Terminate(Process process)
+    internal static void Terminate(Process process)
     {
         if (process.HasExited) return;
         try { process.Kill(); }

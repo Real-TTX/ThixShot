@@ -15,7 +15,7 @@ internal static class WindowsRecording
     private const int FramesPerSecond = 30;
     internal const long TicksPerSecond = TimeSpan.TicksPerSecond;
 
-    public static void Record(string path, RecordingOptions options, Task stop, TaskCompletionSource ready)
+    public static IReadOnlyList<ZoomPoint> Record(string path, RecordingOptions options, Task stop, TaskCompletionSource ready)
     {
         using var desktop = new WindowsDesktop(options.Region, true);
         try { MediaFactory.MFStartup(true).CheckError(); }
@@ -32,12 +32,13 @@ internal static class WindowsRecording
             writer.BeginWriting();
             elapsed.Start();
             audio?.Start();
-            var focus = options.FocusZoom ? new ClickFocus(desktop.Region) : null;
+            var clicks = new List<ZoomPoint>();
+            bool wasPressed = options.FocusZoom && WindowsDesktop.GetAsyncKeyState(1) < 0;
             long frameStart = 0;
             do
             {
-                var viewport = focus?.GetViewport(elapsed.Elapsed.TotalSeconds) ?? desktop.Region;
-                desktop.CopyFrame(viewport, options.ShowCursor);
+                if (options.FocusZoom) CollectClick(desktop.Region, elapsed.Elapsed.TotalSeconds, clicks, ref wasPressed);
+                desktop.CopyFrame(desktop.Region, options.ShowCursor);
                 int length = checked(desktop.Width * desktop.Height * 4);
                 using var buffer = MediaFactory.MFCreateMemoryBuffer(length);
                 buffer.Lock(out var destination, out _, out _);
@@ -53,11 +54,24 @@ internal static class WindowsRecording
             } while (!stop.IsCompleted);
             audio?.Finish(elapsed.Elapsed.Ticks);
             writer.Finalize();
+            return clicks.AsReadOnly();
         }
         finally
         {
             MediaFactory.MFShutdown();
         }
+    }
+
+    private static void CollectClick(CaptureRegion region, double seconds, List<ZoomPoint> points, ref bool wasPressed)
+    {
+        bool pressed = WindowsDesktop.GetAsyncKeyState(1) < 0;
+        if (pressed && !wasPressed && WindowsDesktop.GetCursorPos(out var pointer) && !WindowsDesktop.IsThixShotWindowAt(pointer))
+        {
+            double x = (pointer.X - region.X) / (double)region.Width, y = (pointer.Y - region.Y) / (double)region.Height;
+            if (x is >= 0 and < 1 && y is >= 0 and < 1)
+                points.Add(new ZoomPoint(seconds, 2, x, y, 1.55));
+        }
+        wasPressed = pressed;
     }
 
     internal static int AddVideo(IMFSinkWriter writer, int width, int height)

@@ -167,6 +167,15 @@ internal sealed class WindowsDesktop : IDisposable
     [DllImport("user32")] private static extern nint GetDC(nint window);
     [DllImport("user32")] private static extern int ReleaseDC(nint window, nint dc);
     [DllImport("user32")] internal static extern bool GetCursorPos(out PointerPosition position);
+    internal static bool IsThixShotWindowAt(PointerPosition position)
+    {
+        nint handle = WindowFromPoint(position);
+        if (handle == 0) return false;
+        GetWindowThreadProcessId(handle, out var pid);
+        return pid == Environment.ProcessId;
+    }
+    [DllImport("user32")] private static extern nint WindowFromPoint(PointerPosition point);
+    [DllImport("user32")] private static extern uint GetWindowThreadProcessId(nint handle, out uint process);
     [DllImport("user32")] internal static extern short GetAsyncKeyState(int key);
     [DllImport("user32")] private static extern bool GetCursorInfo(ref CursorInfo cursor);
     [DllImport("user32")] private static extern bool GetIconInfo(nint icon, out IconInfo info);
@@ -181,33 +190,4 @@ internal sealed class WindowsDesktop : IDisposable
     [DllImport("gdi32")] private static extern int SetStretchBltMode(nint dc, int mode);
     [DllImport("gdi32")] private static extern bool SetBrushOrgEx(nint dc, int x, int y, nint previous);
     [DllImport("gdi32")] private static extern bool GdiFlush();
-}
-
-internal sealed class ClickFocus(CaptureRegion bounds)
-{
-    private bool wasPressed;
-    private double lastClick = double.NegativeInfinity, lastFrame, zoom = 1;
-    private double centerX = bounds.X + bounds.Width / 2d, centerY = bounds.Y + bounds.Height / 2d;
-    private double targetX = bounds.X + bounds.Width / 2d, targetY = bounds.Y + bounds.Height / 2d;
-
-    public CaptureRegion GetViewport(double seconds)
-    {
-        bool pressed = WindowsDesktop.GetAsyncKeyState(1) < 0;
-        if (pressed && !wasPressed && WindowsDesktop.GetCursorPos(out var pointer) &&
-            pointer.X >= bounds.X && pointer.Y >= bounds.Y && pointer.X < bounds.X + bounds.Width && pointer.Y < bounds.Y + bounds.Height)
-        {
-            targetX = pointer.X;
-            targetY = pointer.Y;
-            lastClick = seconds;
-        }
-        wasPressed = pressed;
-        double smoothing = 1 - Math.Exp(-7 * Math.Max(0, seconds - lastFrame));
-        lastFrame = seconds;
-        zoom += ((seconds - lastClick < 1.7 ? 1.55 : 1) - zoom) * smoothing;
-        centerX += (targetX - centerX) * smoothing;
-        centerY += (targetY - centerY) * smoothing;
-        int w = (int)Math.Round(bounds.Width / zoom), h = (int)Math.Round(bounds.Height / zoom);
-        return new CaptureRegion(Math.Clamp((int)(centerX - w / 2d), bounds.X, bounds.X + bounds.Width - w),
-            Math.Clamp((int)(centerY - h / 2d), bounds.Y, bounds.Y + bounds.Height - h), w, h);
-    }
 }

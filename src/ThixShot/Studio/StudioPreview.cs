@@ -8,13 +8,15 @@ namespace ThixShot.Studio;
 internal sealed class StudioPreview : Control
 {
     private static readonly Lazy<Bitmap> Wallpaper = new(() => Ui.Asset("Studio.jpg"));
+    private static readonly Lazy<Bitmap> Demo = new(() => Ui.Asset("StudioDemo.jpg"));
     public bool Region { get; init; }
+    public bool Video { get; init; }
     public override void Render(DrawingContext context)
     {
         var size = Bounds.Size;
         if (size.Width <= 0 || size.Height <= 0) return;
         var full = new Rect(size);
-        var source = Wallpaper.Value;
+        var source = Video ? Demo.Value : Wallpaper.Value;
         double scale = Math.Max(size.Width / source.Size.Width, size.Height / source.Size.Height);
         var sample = new Rect((source.Size.Width - size.Width / scale) / 2, (source.Size.Height - size.Height / scale) / 2,
             size.Width / scale, size.Height / scale);

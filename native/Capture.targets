@@ -10,12 +10,13 @@
     <_CaptureTarget Condition="'$(_CaptureArch)' != ''">-target $(_CaptureArch)-apple-macos14.0</_CaptureTarget>
     <_CaptureDir>$(BaseIntermediateOutputPath)capture/$(Configuration)/$(RuntimeIdentifier)</_CaptureDir>
     <_CaptureSource>$(MSBuildThisFileDirectory)ThixShotCapture.swift</_CaptureSource>
+    <_EditSource>$(MSBuildThisFileDirectory)VideoEditing.swift</_EditSource>
   </PropertyGroup>
   <ItemGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
     <None Include="$(_CaptureDir)/ThixShotCapture" Link="ThixShotCapture" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
-  <Target Name="CompileCaptureHelper" BeforeTargets="PrepareForBuild" Condition="$([MSBuild]::IsOSPlatform('OSX'))" Inputs="$(_CaptureSource)" Outputs="$(_CaptureDir)/ThixShotCapture">
+  <Target Name="CompileCaptureHelper" BeforeTargets="PrepareForBuild" Condition="$([MSBuild]::IsOSPlatform('OSX'))" Inputs="$(_CaptureSource);$(_EditSource)" Outputs="$(_CaptureDir)/ThixShotCapture">
     <MakeDir Directories="$(_CaptureDir)" />
-    <Exec Command="MACOSX_DEPLOYMENT_TARGET=14.0 xcrun swiftc -swift-version 5 -O -parse-as-library $(_CaptureTarget) &quot;$(_CaptureSource)&quot; -o &quot;$(_CaptureDir)/ThixShotCapture&quot;" />
+    <Exec Command="MACOSX_DEPLOYMENT_TARGET=14.0 xcrun swiftc -swift-version 5 -O -parse-as-library $(_CaptureTarget) &quot;$(_CaptureSource)&quot; &quot;$(_EditSource)&quot; -o &quot;$(_CaptureDir)/ThixShotCapture&quot;" />
   </Target>
 </Project>

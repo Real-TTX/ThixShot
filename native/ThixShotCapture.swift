@@ -5,7 +5,7 @@ import ImageIO
 import ScreenCaptureKit
 import UniformTypeIdentifiers
 
-private struct CaptureError: LocalizedError {
+struct CaptureError: LocalizedError {
     let message: String
     init(_ message: String) { self.message = message }
     var errorDescription: String? { message }
@@ -26,22 +26,19 @@ private final class MovieOutput: NSObject, SCStreamOutput, SCStreamDelegate {
     let outputSize: CGSize
     let screenRect: CGRect
     let focusEnabled: Bool
+    let excludedPID: Int32?
     let firstScreenFrame = DispatchSemaphore(value: 0)
     var sessionStart: CMTime?
     var lastVideoTime: CMTime?
-    private var latestFrame: CIImage?
-    private var lastClick = -Double.infinity
-    private var lastFrame = 0.0
-    private var zoom = 1.0
-    private var center = CGPoint(x: 0.5, y: 0.5)
-    private var target = CGPoint(x: 0.5, y: 0.5)
+    var zoomPoints = [VideoZoom]()
     private var wasPressed = false
 
-    init(url: URL, width: Int, height: Int, screenRect: CGRect, focus: Bool, sound: Bool) throws {
+    init(url: URL, width: Int, height: Int, screenRect: CGRect, focus: Bool, sound: Bool, excludedPID: Int32? = nil) throws {
         writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         outputSize = CGSize(width: width, height: height)
         self.screenRect = screenRect
         focusEnabled = focus
+        self.excludedPID = excludedPID
         video = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height,
             AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: min(12_000_000, max(750_000, width * height * 4)),
@@ -83,19 +80,30 @@ private final class MovieOutput: NSObject, SCStreamOutput, SCStreamDelegate {
                 as? [[SCStreamFrameInfo: Any]],
               let status = attachments.first?[.status] as? Int, status == SCFrameStatus.complete.rawValue else { return }
         let frame = CIImage(cvPixelBuffer: buffer)
-        if focusEnabled { latestFrame = frame }
-        if !focusEnabled || lastVideoTime == nil {
-            do { try append(image: frame, at: time, announce: true) }
-            catch { fail(error) }
-        }
+        do { try append(image: frame, at: time, announce: true) }
+        catch { fail(error) }
     }
 
-    func animateFocus() {
-        guard let latestFrame, let last = lastVideoTime else { return }
-        let now = CMClockGetTime(CMClockGetHostTimeClock())
-        guard now > last else { return }
-        do { try append(image: latestFrame, at: now, announce: true) }
-        catch { fail(error) }
+    func collectClick() {
+        guard let start = sessionStart else { return }
+        let pressed = CGEventSource.buttonState(.combinedSessionState, button: .left)
+        if pressed && !wasPressed, let point = CGEvent(source: nil)?.location, screenRect.contains(point), !hitsRecordingControl(point) {
+            zoomPoints.append(VideoZoom(startSeconds: max(0, (CMClockGetTime(CMClockGetHostTimeClock()) - start).seconds),
+                durationSeconds: 2, x: (point.x - screenRect.minX) / screenRect.width,
+                y: (point.y - screenRect.minY) / screenRect.height, scale: 1.55))
+        }
+        wasPressed = pressed
+    }
+
+    private func hitsRecordingControl(_ point: CGPoint) -> Bool {
+        guard let excludedPID, let windows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] else { return false }
+        return windows.contains { window in
+            guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == excludedPID,
+                  let bounds = window[kCGWindowBounds as String] as? [String: Double],
+                  let x = bounds["X"], let y = bounds["Y"], let w = bounds["Width"], let h = bounds["Height"],
+                  (window[kCGWindowAlpha as String] as? Double ?? 1) > 0 else { return false }
+            return CGRect(x: x, y: y, width: w, height: h).contains(point)
+        }
     }
 
     func append(image: CIImage, at time: CMTime, announce: Bool) throws {
@@ -113,7 +121,7 @@ private final class MovieOutput: NSObject, SCStreamOutput, SCStreamDelegate {
         guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pixelBuffer) == kCVReturnSuccess, let pixelBuffer else {
             throw CaptureError("Der Videopuffer konnte nicht erstellt werden.")
         }
-        let viewport = focusEnabled ? focusRect(in: image.extent, at: time.seconds) : image.extent
+        let viewport = image.extent
         let frame = image.cropped(to: viewport)
             .transformed(by: CGAffineTransform(translationX: -viewport.minX, y: -viewport.minY))
             .transformed(by: CGAffineTransform(scaleX: outputSize.width / viewport.width, y: outputSize.height / viewport.height))
@@ -127,25 +135,6 @@ private final class MovieOutput: NSObject, SCStreamOutput, SCStreamDelegate {
             firstScreenFrame.signal()
         }
         lastVideoTime = time
-    }
-
-    private func focusRect(in extent: CGRect, at seconds: Double) -> CGRect {
-        let pressed = CGEventSource.buttonState(.combinedSessionState, button: .left)
-        if pressed && !wasPressed, let point = CGEvent(source: nil)?.location, screenRect.contains(point) {
-            target = CGPoint(x: (point.x - screenRect.minX) / screenRect.width,
-                             y: 1 - (point.y - screenRect.minY) / screenRect.height)
-            lastClick = seconds
-        }
-        wasPressed = pressed
-        let smoothing = 1 - exp(-7 * max(0, seconds - lastFrame))
-        lastFrame = seconds
-        zoom += ((seconds - lastClick < 1.7 ? 1.55 : 1) - zoom) * smoothing
-        center.x += (target.x - center.x) * smoothing
-        center.y += (target.y - center.y) * smoothing
-        let width = extent.width / zoom, height = extent.height / zoom
-        return CGRect(x: min(extent.maxX - width, max(extent.minX, extent.minX + center.x * extent.width - width / 2)),
-                      y: min(extent.maxY - height, max(extent.minY, extent.minY + center.y * extent.height - height / 2)),
-                      width: width, height: height)
     }
 
     func finish(at time: CMTime) async throws {
@@ -168,10 +157,13 @@ private enum CaptureHelper {
     static func run(_ args: [String]) async throws {
         guard args.count >= 2 else { throw CaptureError("Befehl und Zieldatei fehlen.") }
         let url = URL(fileURLWithPath: args[1])
+        if ["inspect", "frame", "export"].contains(args[0]) { try await VideoEditing.run(args, source: url); return }
         if args[0] == "self-test" {
             let bounds = CGRect(x: 0, y: 0, width: 320, height: 180)
             let output = try MovieOutput(url: url, width: 320, height: 180, screenRect: bounds, focus: false, sound: false)
-            let image = CIImage(color: CIColor(red: 0.3, green: 0.5, blue: 0.9)).cropped(to: bounds)
+            let red = CIImage(color: CIColor(red: 0.9, green: 0.05, blue: 0.05)).cropped(to: bounds)
+            let image = CIImage(color: CIColor(red: 0.05, green: 0.05, blue: 0.9))
+                .cropped(to: CGRect(x: 0, y: 90, width: 320, height: 90)).composited(over: red)
             for i in 0..<6 {
                 let deadline = Date().addingTimeInterval(8)
                 while !output.video.isReadyForMoreMediaData {
@@ -187,6 +179,7 @@ private enum CaptureHelper {
             guard frame.width == 320, frame.height == 180 else {
                 throw CaptureError("Das dekodierte Testvideo hat eine unerwartete Größe.")
             }
+            try await VideoEditing.verify(source: url)
             return
         }
         guard args.count >= 3, let parent = Int32(args[2]) else { throw CaptureError("Die App-Prozess-ID fehlt.") }
@@ -237,17 +230,16 @@ private enum CaptureHelper {
         config.channelCount = 2
         config.sampleRate = 48_000
         let movie = try MovieOutput(url: url, width: config.width, height: config.height, screenRect: screenRect,
-                                    focus: args[3] == "1", sound: config.capturesAudio)
+                                    focus: args[3] == "1", sound: config.capturesAudio, excludedPID: parent)
         let queue = DispatchQueue(label: "de.thixapps.ThixShot.capture")
         let stream = SCStream(filter: filter, configuration: config, delegate: movie)
         try stream.addStreamOutput(movie, type: .screen, sampleHandlerQueue: queue)
         if config.capturesAudio { try stream.addStreamOutput(movie, type: .audio, sampleHandlerQueue: queue) }
         try await stream.startCapture()
-        // ScreenCaptureKit sends idle frames without pixels. Render the last image while
-        // a click zoom animates, including when the underlying screen is motionless.
+        // Record editing suggestions separately, including clicks on an unchanged screen.
         let animation = DispatchSource.makeTimerSource(queue: queue)
         if movie.focusEnabled {
-            animation.setEventHandler { movie.animateFocus() }
+            animation.setEventHandler { movie.collectClick() }
             animation.schedule(deadline: .now(), repeating: .milliseconds(33))
         }
         animation.resume()
@@ -266,5 +258,6 @@ private enum CaptureHelper {
         try await stream.stopCapture()
         queue.sync {}
         try await movie.finish(at: CMClockGetTime(CMClockGetHostTimeClock()))
+        FileHandle.standardOutput.write(try JSONEncoder().encode(movie.zoomPoints))
     }
 }

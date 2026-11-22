@@ -93,7 +93,7 @@ public static class CloudService
             try
             {
                 var quota = await client.GetDriveQuotaAsync(ct);
-                await using var source = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
+                await using var source = await MediaLibrary.OpenExportAsync(filePath, ct);
                 var size = source.Length;
                 if (size == 0) throw new InvalidDataException("Die Aufnahme ist leer.");
                 if (size > quota.MaxFileBytes || (quota.QuotaBytes is long limit && size > limit - quota.UsedBytes))

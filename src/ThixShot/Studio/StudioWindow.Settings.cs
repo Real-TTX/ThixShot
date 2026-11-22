@@ -145,11 +145,11 @@ internal sealed partial class StudioWindow
     private int settingsTab;
     private async Task AutomaticUpdateAsync()
     {
-        if (busy || !UpdateService.ShouldCheckAutomatically) return;
+        if (busy || !IsVisible || !UpdateService.ShouldCheckAutomatically) return;
         try
         {
             var version = await UpdateService.CheckAsync(lifetime.Token);
-            if (version == null || busy || !UpdateService.ShouldCheckAutomatically) return;
+            if (version == null || busy || !IsVisible || !UpdateService.ShouldCheckAutomatically) return;
             pendingVersion = version;
             Run(InstallUpdateAsync);
         }

@@ -12,11 +12,19 @@ Die Bildschirmaufnahme nutzt unter Windows 10/11 Media Foundation. Windows-N-Edi
 
 ## Aufnahme und Mediathek
 
-- **Screenshot** erfasst den Hauptbildschirm oder einen mit der Maus gewählten Ausschnitt. Der Timer bietet 3, 5 oder 10 Sekunden Vorlauf. Im Editor stehen Textmarker, Pfeile, Rahmen, Zuschneiden und Rückgängig zur Verfügung. „In Mediathek speichern“ legt eine neue PNG-Datei an. Das Vorschaubild im Studio lässt sich ebenfalls im Editor ausprobieren.
-- **Video** zeichnet den Hauptbildschirm oder einen Ausschnitt mit bis zu 30 Bildern pro Sekunde in MP4/H.264 auf. Mauszeiger, Klick-Zoom und Systemton lassen sich einzeln einstellen. Das schwebende Bedienfeld zeigt die Dauer und beendet die Aufnahme. Die Ausgabe passt in 1920 × 1080 Pixel und erhält das Seitenverhältnis.
+- **Bereitschaft** in der Titelleiste öffnet eine halbtransparente Leiste oben mittig am Bildschirm. Screenshot oder Video direkt dort starten. Während der Aufnahme erscheinen Dauer und Stopp. Am Griff lässt sich die Leiste verschieben. Im Menü lässt sich die Standardposition wiederherstellen. Das Monitorsymbol führt zurück ins Studio.
+- **Screenshot** erfasst den Hauptbildschirm oder einen mit der Maus gewählten Ausschnitt. Der Timer bietet 3, 5 oder 10 Sekunden Vorlauf. Im Editor lassen sich Text, Freihandlinien, Pfeile, Rahmen und Markierungen einfügen. Zuschneiden, 100-%-Ansicht, Verschieben, Rückgängig und Wiederholen unterstützen die Detailarbeit. Das Ergebnis lässt sich kopieren, als PNG exportieren oder in der Mediathek speichern.
+- **Video** zeichnet den Hauptbildschirm oder einen Ausschnitt mit bis zu 30 Bildern pro Sekunde in MP4/H.264 auf. Mauszeiger, Klick-Zoom und Systemton lassen sich einzeln einstellen. Die Ausgabe passt in 1920 × 1080 Pixel und erhält das Seitenverhältnis.
+- **Video bearbeiten** öffnet die Aufnahme und ihre Zoomspur. Den Abspielkopf auf die gewünschte Stelle setzen und „Zoom hinzufügen“ wählen. Ein Klick ins Bild bestimmt das Ziel. Zoomabschnitte können verschoben, an ihren Rändern gekürzt, verstärkt oder entfernt werden. „Projekt speichern“ behält die Einstellungen für spätere Bearbeitung. „MP4 exportieren“ rendert die aktuelle Fassung mit Ton. Die Zeitleiste bietet eine stumme Bildvorschau. Im Videomodus legt „Beispielvideo anlegen“ einen sechssekündigen Clip zum Ausprobieren an.
 - **Mediathek** bietet Suche, Formatfilter und Sortierung. Aufnahmedetails öffnen, um Dateien umzubenennen, zu exportieren, zu löschen oder hochzuladen. Screenshots lassen sich in die Zwischenablage kopieren, Videos im Standardplayer abspielen. Die Dateien liegen im lokalen Anwendungsdatenordner unter `ThixShot/Media`.
 - **Einstellungen** enthalten die Darstellung (System, Hell oder Dunkel), Autostart und Updates. Vollautomatische Updates sind optional. Titelleiste, einklappbare Seitenleiste und Dialoge verwenden wie ThixClip die gemeinsame MatDesktop-Oberfläche. Die Versionsnummer unten links öffnet „Über ThixShot“.
 - **ThixCloud** koppelt das Gerät per Browsercode mit der eigenen Instanz. Manuell ausgewählte Dateien landen im persönlichen ThixDrive im Ordner **ThixShot**. Für MatCloud-Vertrag 1.4.0 liegt die erforderliche [Serverfreigabe für die App-ID shot](integrations/matcloud/README.md) bei.
+
+Ab Version 0.2 bleibt das Originalvideo in der Mediathek erhalten. Die lokale Zoomspur liegt unter `Media/.edits`. Wiedergabe, Export und Cloud-Upload verwenden die gespeicherte Schnittfassung. Bei Aufnahmen aus Version 0.1 gehören die damaligen Zooms bereits zum Bild. Zusätzliche Zooms sind auch bei diesen Dateien möglich.
+
+![Bereitschaftsleiste](docs/bereitschaft.png)
+
+![Videoeditor mit Zoomspur](docs/videoeditor.png)
 
 ## Entwicklung
 
@@ -32,7 +40,7 @@ Das Windows-MSI entsteht mit `./scripts/package-windows.ps1`. Auf einem Mac erst
 
 | Build | Anzeige | Verteilung |
 | --- | --- | --- |
-| main | `0.1.<Laufnummer>-<yyyyMMdd>` | GitHub Release und Release-Updatekanal |
+| main | `<Major>.<Minor>.<Laufnummer>-<yyyyMMdd>` | GitHub Release und Release-Updatekanal |
 | dev | `nightly-<Laufnummer>-<yyyyMMdd>` | Nightly-Updatekanal |
 | Weitere Branches, Pull Requests, lokaler Build | `local-<yyyyMMdd>` | CI-Artefakte bzw. lokales Paket |
 

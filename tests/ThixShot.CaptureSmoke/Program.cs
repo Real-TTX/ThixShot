@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using NAudio.Wave;
+using SkiaSharp;
 using ThixShot.Capture;
 using Vortice.MediaFoundation;
 
@@ -12,7 +13,7 @@ internal static class Program
 {
     private const int Width = 320, Height = 180, FrameRate = 30, SampleRate = 48_000;
 
-    private static void Main()
+    private static async Task Main()
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("This test uses Windows Media Foundation.");
         string output = Path.Combine(Path.GetTempPath(), $"thixshot-smoke-{Guid.NewGuid():N}.mp4");
@@ -22,13 +23,35 @@ internal static class Program
             EncodeTestPattern(output);
             VerifyDecodedVideo(output);
             VerifyDecodedAudio(output);
-            Console.WriteLine("Decoded H.264 test pattern and stereo AAC tone successfully.");
+            await VerifyEditorAsync(output);
+            Console.WriteLine("Decoded H.264 source, checked editable zoom export and preserved stereo AAC tone.");
         }
         finally
         {
             MediaFactory.MFShutdown();
             File.Delete(output);
         }
+    }
+
+    private static async Task VerifyEditorAsync(string source)
+    {
+        string zoomed = Path.Combine(Path.GetTempPath(), $"thixshot-edit-{Guid.NewGuid():N}.mp4");
+        try
+        {
+            var info = await VideoEditService.InspectAsync(source);
+            if (info.Width != Width || info.Height != Height || Math.Abs(info.DurationSeconds - 1) > 0.05)
+                throw new InvalidDataException("Unexpected source metadata.");
+            var points = new[] { new ZoomPoint(0, 1, .5, .12, 2) };
+            await VideoEditService.ExportAsync(source, zoomed, points);
+            using var original = SKBitmap.Decode(await VideoEditService.FrameAsync(source, .5));
+            using var cropped = SKBitmap.Decode(await VideoEditService.FrameAsync(zoomed, .5));
+            var before = original.GetPixel(Width / 2, Height - 20);
+            var after = cropped.GetPixel(Width / 2, Height - 20);
+            if (before.Red < 180 || before.Blue > 80 || after.Blue < 180 || after.Red > 80)
+                throw new InvalidDataException("The zoom must move the upper blue half into the bottom of the exported frame.");
+            VerifyDecodedAudio(zoomed);
+        }
+        finally { File.Delete(zoomed); }
     }
 
     private static void EncodeTestPattern(string output)

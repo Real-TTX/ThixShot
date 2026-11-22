@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup>
     <ThixShotMajor>0</ThixShotMajor>
-    <ThixShotMinor>1</ThixShotMinor>
+    <ThixShotMinor>2</ThixShotMinor>
     <Channel Condition="'$(Channel)' == ''">local</Channel>
     <BuildNumber Condition="'$(BuildNumber)' == ''">0</BuildNumber>
     <BuildDate Condition="'$(BuildDate)' == ''">$([System.DateTime]::UtcNow.ToString('yyyyMMdd'))</BuildDate>

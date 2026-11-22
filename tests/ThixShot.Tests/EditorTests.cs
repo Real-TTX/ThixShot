@@ -49,6 +49,52 @@ public sealed class EditorTests
     }
 
     [Fact]
+    public void Redo_recovers_the_cropped_pen_and_text_and_a_new_mark_starts_a_new_history()
+    {
+        using var input = TestProfile.TestImage();
+        using var document = new ImageDocument(input);
+        SKPoint[] points = [new(3, 25), new(16, 17), new(26, 21)];
+        Assert.True(ImageEditor.Add(document, new(MarkTool.Pen, points[0], points[^1], SKColors.Blue, 3, Points: points)));
+        Assert.True(ImageEditor.Add(document, new(MarkTool.Text, new(27, 1), default, SKColors.Red, 14, "Ab")));
+        Assert.True(ImageEditor.Add(document, new(MarkTool.Crop, new(2, 1), new(59, 30), default)));
+        using var expected = ImageEditor.Render(document);
+        using var pixels = SKBitmap.Decode(expected);
+        Assert.Equal(SKColors.Blue, pixels.GetPixel(14, 16));
+        Assert.Contains(pixels.Pixels, color => color.Red > 230 && color.Green < 30 && color.Blue < 30);
+        ImageEditor.Undo(document);
+        ImageEditor.Undo(document);
+        ImageEditor.Redo(document);
+        ImageEditor.Redo(document);
+        using var restored = ImageEditor.Render(document);
+        Assert.Equal(expected.ToArray(), restored.ToArray());
+        ImageEditor.Undo(document);
+        Assert.True(ImageEditor.Add(document, new(MarkTool.Rectangle, new(9, 8), new(15, 12), SKColors.Red)));
+        Assert.Empty(document.RedoStack);
+        Assert.Equal(new SKRectI(0, 0, 64, 32), document.Visible);
+    }
+
+    [Fact]
+    public void Png_export_replaces_only_the_selected_file_and_leaves_no_staging_files()
+    {
+        using var input = TestProfile.TestImage();
+        using var document = new ImageDocument(input);
+        ImageEditor.Add(document, new(MarkTool.Crop, new(4, 4), new(28, 14), default));
+        using var encoded = ImageEditor.Render(document);
+        var folder = Directory.CreateTempSubdirectory("thixshot-export-test-");
+        try
+        {
+            var path = Path.Combine(folder.FullName, "Ausgabe.png");
+            File.WriteAllBytes(path, new byte[8192]);
+            ImageOutput.WriteLocalFile(encoded, path);
+            Assert.Equal(encoded.ToArray(), File.ReadAllBytes(path));
+            Assert.Single(folder.GetFiles());
+            using var saved = SKBitmap.Decode(path);
+            Assert.Equal((24, 10), (saved.Width, saved.Height));
+        }
+        finally { folder.Delete(recursive: true); }
+    }
+
+    [Fact]
     public void Stroke_tools_draw_the_selected_color_and_reject_an_accidental_click()
     {
         using var input = TestProfile.TestImage();

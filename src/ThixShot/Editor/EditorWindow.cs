@@ -44,7 +44,8 @@ internal sealed partial class EditorWindow : MatWindow
     private float textSize;
     private ImageMark[] savedState = [];
     private bool canClose;
-    private bool confirming;
+    private readonly EditorClosePrompt closePrompt = new();
+    private string? savedPath;
     private bool outputBusy;
 
     public EditorWindow(Stream source, bool sample = false)
@@ -55,6 +56,7 @@ internal sealed partial class EditorWindow : MatWindow
         Title = sample ? "Beispielbild bearbeiten · ThixShot" : "Screenshot bearbeiten · ThixShot";
         Width = 1110; Height = 740; MinWidth = 790; MinHeight = 530;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        ClosingBehavior = WindowClosingBehavior.OwnerWindowOnly;
         UseOwnTitleBar();
         var logo = Ui.Asset("Mark.png");
         var title = new MatTitleBar { AppName = "ThixShot", Logo = logo, BrandWidth = 192,
@@ -109,11 +111,23 @@ internal sealed partial class EditorWindow : MatWindow
             if (outputBusy) { args.Cancel = true; return; }
             if (!HasChanges) return;
             args.Cancel = true;
-            if (!confirming) _ = ConfirmCloseAsync();
+            closePrompt.Request(this, "Der Screenshot enthält ungespeicherte Bearbeitungen.", SaveLibrary,
+                () => { canClose = true; Close(); });
         };
         Closed += (_, _) => { surface.Dispose(); document.Dispose(); logo.Dispose(); };
         Select(MarkTool.Highlight);
         Refresh();
+    }
+
+    internal async Task<string?> ShowStandaloneAsync()
+    {
+        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Closed += (_, _) => closed.TrySetResult();
+        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        Show();
+        Activate();
+        await closed.Task;
+        return savedPath;
     }
 
     private static string Shortcut(string key) => (OperatingSystem.IsMacOS() ? "⌘+" : "Strg+") + key;

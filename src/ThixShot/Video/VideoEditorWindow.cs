@@ -10,6 +10,7 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using MatDesktop;
 using ThixShot.Capture;
+using ThixShot.Editor;
 using ThixShot.Library;
 using ThixShot.Studio;
 
@@ -35,7 +36,8 @@ internal sealed class VideoEditorWindow : MatWindow
     private readonly Control properties;
     private double position, playbackStart;
     private int selected;
-    private bool syncing, picking, decoding, closing, allowClose, working;
+    private readonly EditorClosePrompt closePrompt = new();
+    private bool syncing, picking, decoding, allowClose, working;
     private double? requested;
     private CancellationTokenSource? exportCancellation;
 
@@ -47,6 +49,7 @@ internal sealed class VideoEditorWindow : MatWindow
         Title = $"{Path.GetFileNameWithoutExtension(path)} · Videoeditor · ThixShot";
         Width = 1120; Height = 770; MinWidth = 800; MinHeight = 570;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        ClosingBehavior = WindowClosingBehavior.OwnerWindowOnly;
         UseOwnTitleBar();
         var title = new MatTitleBar
         {
@@ -143,7 +146,9 @@ internal sealed class VideoEditorWindow : MatWindow
             if (working) { e.Cancel = true; exportCancellation?.Cancel(); return; }
             if (!Dirty) return;
             e.Cancel = true;
-            if (!closing) Dispatcher.UIThread.Post(async () => await ConfirmCloseAsync());
+            Pause();
+            closePrompt.Request(this, "Änderungen an den Zooms speichern?",
+                () => { Save(); if (!Dirty) CloseAfterConfirmation(); }, CloseAfterConfirmation);
         };
         Closed += (_, _) =>
         {
@@ -334,29 +339,8 @@ internal sealed class VideoEditorWindow : MatWindow
             content.Children[1].IsEnabled = true; File.Delete(temporary);
         }
     }
-    private async Task ConfirmCloseAsync()
-    {
-        if (closing || !IsVisible) return;
-        closing = true; Pause();
-        try
-        {
-            var dialog = new MatWindow
-            {
-                Title = "Videoprojekt schließen",
-                Width = 440,
-                SizeToContent = SizeToContent.Height,
-                CanResize = false,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner
-            };
-            var actions = Ui.Row(8, Ui.Button("Speichern", null, () => dialog.Close(1), "primary"),
-                Ui.Button("Weiter bearbeiten", null, () => dialog.Close(0)), Ui.Button("Verwerfen", null, () => dialog.Close(2)));
-            dialog.Content = new Border { Padding = new Thickness(20), Child = Ui.Stack(16, Wrap("Änderungen an den Zooms speichern?"), actions) };
-            int answer = await dialog.ShowDialog<int>(this);
-            if (answer == 1) Save();
-            if (answer == 2 || answer == 1 && !Dirty) { allowClose = true; Close(); }
-        }
-        finally { closing = false; }
-    }
+    private void CloseAfterConfirmation() { allowClose = true; Close(); }
+
     private void HandleKey(object? sender, KeyEventArgs e)
     {
         if (working || e.Source is TextBox) return;

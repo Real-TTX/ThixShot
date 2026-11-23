@@ -8,6 +8,7 @@ namespace ThixShot.Capture;
 internal sealed class WindowsDesktop : IDisposable
 {
     private const int SourceCopyWithLayers = 0x00CC0020 | 0x40000000;
+    private const int VirtualLeft = 76, VirtualTop = 77, VirtualWidth = 78, VirtualHeight = 79;
     private readonly nint previousDpiContext;
     private nint screen, memory, bitmap, previousBitmap;
     private nint previousCursor;
@@ -18,16 +19,21 @@ internal sealed class WindowsDesktop : IDisposable
     public int Height { get; }
     public nint Pixels { get; }
 
-    public WindowsDesktop(CaptureRegion? selectedRegion, bool video)
+    public WindowsDesktop(CaptureRegion? selectedRegion, bool video) : this(selectedRegion, video, virtualDesktop: false) { }
+
+    private WindowsDesktop(CaptureRegion? selectedRegion, bool video, bool virtualDesktop)
     {
+        // GetSystemMetrics and GDI must both see the same physical coordinate space, including
+        // monitors to the left or above the primary display, whatever their DPI scale.
         previousDpiContext = SetThreadDpiAwarenessContext(-4);
+        if (previousDpiContext == 0) throw new Win32Exception(Marshal.GetLastWin32Error(), "Die Bildschirmauflösung konnte nicht ermittelt werden.");
         try
         {
-            int screenWidth = GetSystemMetrics(0);
-            int screenHeight = GetSystemMetrics(1);
-            Region = selectedRegion ?? new CaptureRegion(0, 0, screenWidth, screenHeight);
-            if ((long)Region.X + Region.Width > screenWidth || (long)Region.Y + Region.Height > screenHeight)
-                throw new ArgumentException("Der Aufnahmebereich liegt außerhalb des Hauptbildschirms.");
+            var bounds = virtualDesktop
+                ? new CaptureRegion(GetSystemMetrics(VirtualLeft), GetSystemMetrics(VirtualTop), GetSystemMetrics(VirtualWidth), GetSystemMetrics(VirtualHeight))
+                : new CaptureRegion(0, 0, GetSystemMetrics(0), GetSystemMetrics(1));
+            Region = selectedRegion ?? bounds;
+            if (!bounds.Contains(Region)) throw new ArgumentException("Der Aufnahmebereich liegt außerhalb des verfügbaren Bildschirms.");
             double scale = Math.Min(1, Math.Min(1920d / Region.Width, 1080d / Region.Height));
             Width = video ? Math.Max(2, (int)(Region.Width * scale) / 2 * 2) : Region.Width;
             Height = video ? Math.Max(2, (int)(Region.Height * scale) / 2 * 2) : Region.Height;
@@ -74,16 +80,20 @@ internal sealed class WindowsDesktop : IDisposable
         return name.ToString();
     }
 
-    public static void SaveScreenshot(string path)
+    public static CaptureRegion SaveScreenshot(string path, bool virtualDesktop)
     {
-        using var desktop = new WindowsDesktop(null, false);
-        desktop.CopyFrame(desktop.Region, false);
+        using var desktop = new WindowsDesktop(null, video: false, virtualDesktop);
+        CheckAccess();
+        if (!BitBlt(desktop.memory, 0, 0, desktop.Width, desktop.Height, desktop.screen, desktop.Region.X, desktop.Region.Y, SourceCopyWithLayers))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Windows konnte das Bildschirmbild nicht kopieren.");
+        GdiFlush();
         var info = new SKImageInfo(desktop.Width, desktop.Height, SKColorType.Bgra8888, SKAlphaType.Opaque);
         using var pixels = new SKPixmap(info, desktop.Pixels, info.RowBytes);
         using var image = SKImage.FromPixels(pixels);
         using var data = image.Encode(SKEncodedImageFormat.Png, 100) ?? throw new IOException("Das PNG konnte nicht kodiert werden.");
         using var output = File.Create(path);
         data.SaveTo(output);
+        return desktop.Region;
     }
 
     public void CopyFrame(CaptureRegion viewport, bool showCursor)
@@ -156,7 +166,7 @@ internal sealed class WindowsDesktop : IDisposable
     [StructLayout(LayoutKind.Sequential)]
     internal struct PointerPosition { public int X, Y; }
 
-    [DllImport("user32")] private static extern nint SetThreadDpiAwarenessContext(nint context);
+    [DllImport("user32", SetLastError = true)] private static extern nint SetThreadDpiAwarenessContext(nint context);
     [DllImport("user32", SetLastError = true)] private static extern nint OpenInputDesktop(uint flags, bool inherit, uint access);
     [DllImport("user32")] private static extern bool CloseDesktop(nint desktop);
     [DllImport("kernel32")] private static extern uint GetCurrentThreadId();
@@ -187,6 +197,7 @@ internal sealed class WindowsDesktop : IDisposable
     [DllImport("gdi32")] private static extern int GetObjectW(nint obj, int bytes, out NativeBitmap data);
     [DllImport("gdi32", SetLastError = true)] private static extern nint CreateDIBSection(nint dc, ref BitmapHeader header, uint usage, out nint pointer, nint section, uint offset);
     [DllImport("gdi32", SetLastError = true)] private static extern bool StretchBlt(nint to, int x, int y, int w, int h, nint from, int sx, int sy, int sw, int sh, int operation);
+    [DllImport("gdi32", SetLastError = true)] private static extern bool BitBlt(nint to, int x, int y, int w, int h, nint from, int sx, int sy, int operation);
     [DllImport("gdi32")] private static extern int SetStretchBltMode(nint dc, int mode);
     [DllImport("gdi32")] private static extern bool SetBrushOrgEx(nint dc, int x, int y, nint previous);
     [DllImport("gdi32")] private static extern bool GdiFlush();

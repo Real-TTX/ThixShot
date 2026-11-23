@@ -33,8 +33,12 @@ public sealed class StudioTests
                 frame.Save(Path.Combine(output, "studio.png"));
             }
             Assert.NotNull(ButtonWithLabel(studio, "Screenshot erstellen"));
+            ComboBox CaptureArea() => Assert.Single(studio.GetVisualDescendants().OfType<ComboBox>(),
+                combo => combo.Items.Contains("Bereich aufziehen"));
+            Assert.Equal("Bereich aufziehen", CaptureArea().SelectedItem);
             Click(studio, "Video");
             Assert.NotNull(ButtonWithLabel(studio, "Aufnahme starten"));
+            Assert.Equal("Gesamter Hauptbildschirm", CaptureArea().SelectedItem);
             Assert.Contains(studio.GetVisualDescendants().OfType<CheckBox>(), box => box.Content as string == "Fokus-Zoom");
             Click(studio, MatVersion.Format(UpdateService.DisplayVersion, UpdateService.Channel));
             Assert.Contains(studio.GetVisualDescendants().OfType<TextBlock>(), block => block.Text == "Über ThixShot");

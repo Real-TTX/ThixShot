@@ -1,10 +1,4 @@
-using Avalonia;
-using Avalonia.Controls;
-using Avalonia.Layout;
-using Avalonia.Media;
 using Avalonia.Platform.Storage;
-using MatDesktop;
-using ThixShot.Studio;
 
 namespace ThixShot.Editor;
 
@@ -16,9 +10,9 @@ internal sealed partial class EditorWindow
         try
         {
             CommitText();
-            var destination = ImageOutput.SaveToLibrary(document);
+            savedPath = ImageOutput.SaveToLibrary(document);
             canClose = true;
-            Close(destination);
+            Close(savedPath);
         }
         catch (Exception error) { hint.Text = error.Message; }
     }
@@ -61,29 +55,5 @@ internal sealed partial class EditorWindow
         }
         catch (Exception error) { hint.Text = error.Message; }
         finally { outputBusy = false; }
-    }
-
-    private async Task ConfirmCloseAsync()
-    {
-        confirming = true;
-        try
-        {
-            var dialog = new MatWindow { Title = "Änderungen speichern?", Width = 490, SizeToContent = SizeToContent.Height,
-                CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner };
-            var heading = Ui.Text("Änderungen speichern?", 19, weight: FontWeight.SemiBold);
-            var body = Ui.Text("Der Screenshot enthält ungespeicherte Bearbeitungen.", 14, Ui.Muted);
-            body.TextWrapping = TextWrapping.Wrap;
-            var actions = Ui.Row(8, Ui.Button("Speichern", "save", () => dialog.Close("save"), "primary"),
-                Ui.Button("Weiter bearbeiten", null, () => dialog.Close("continue")));
-            var discard = Ui.Button("Verwerfen", null, () => dialog.Close("discard"));
-            discard.Margin = new Thickness(8, 0, 0, 0);
-            actions.Children.Add(discard);
-            dialog.Content = new Border { Padding = new Thickness(22), Child = Ui.Stack(14, heading, body, actions) }
-                .Use(Border.BackgroundProperty, "Mat.Surface");
-            var answer = await dialog.ShowDialog<string?>(this);
-            if (answer == "save") SaveLibrary();
-            if (answer == "discard") { canClose = true; Close(); }
-        }
-        finally { confirming = false; }
     }
 }

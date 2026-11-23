@@ -45,10 +45,12 @@ public sealed class EditorWorkspaceTests
         editor.KeyPress(Key.Z, RawInputModifiers.Control | RawInputModifiers.Shift, PhysicalKey.Z, "Z");
         Assert.Equal(preview, ReadPixel(editor, center));
         editor.Close();
+        Dispatcher.UIThread.RunJobs();
         var guard = Assert.Single(editor.OwnedWindows);
         StudioTests.Click(guard, "Weiter bearbeiten");
         Assert.True(editor.IsVisible);
         editor.Close();
+        Dispatcher.UIThread.RunJobs();
         StudioTests.Click(Assert.Single(editor.OwnedWindows), "Verwerfen");
         Assert.False(editor.IsVisible);
     }

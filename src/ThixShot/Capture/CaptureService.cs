@@ -1,6 +1,10 @@
 namespace ThixShot.Capture;
 
-public readonly record struct CaptureRegion(int X, int Y, int Width, int Height);
+public readonly record struct CaptureRegion(int X, int Y, int Width, int Height)
+{
+    internal bool Contains(CaptureRegion other) => other.Width > 0 && other.Height > 0 && other.X >= X && other.Y >= Y &&
+        (long)other.X + other.Width <= (long)X + Width && (long)other.Y + other.Height <= (long)Y + Height;
+}
 
 public sealed record RecordingOptions(
     bool FocusZoom = false,
@@ -10,27 +14,51 @@ public sealed record RecordingOptions(
 
 public static class CaptureService
 {
+    private enum ScreenshotTarget { Primary, VirtualDesktop, InteractiveSelection }
     private static int recordingInProgress;
 
-    public static async Task TakeScreenshotAsync(string outputPath, CancellationToken cancellationToken = default)
+    public static Task TakeScreenshotAsync(string outputPath, CancellationToken cancellationToken = default) =>
+        SaveScreenshotAsync(outputPath, ScreenshotTarget.Primary, cancellationToken);
+
+    /// <summary>Freezes all Windows monitors. The PNG's pixel (0, 0) is the returned desktop origin.</summary>
+    internal static async Task<CaptureRegion> TakeVirtualDesktopScreenshotAsync(string outputPath, CancellationToken ct)
     {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Die virtuelle Desktopaufnahme benötigt Windows.");
+        return await SaveScreenshotAsync(outputPath, ScreenshotTarget.VirtualDesktop, ct).ConfigureAwait(false)
+            ?? throw new IOException("Windows hat kein Bildschirmbild geliefert.");
+    }
+
+    /// <summary>Lets macOS select a rectangle at native resolution. Escape leaves the destination untouched.</summary>
+    internal static async Task<bool> TakeInteractiveSnipAsync(string outputPath, CancellationToken ct)
+    {
+        if (!OperatingSystem.IsMacOS()) throw new PlatformNotSupportedException("Die native Ausschnittsauswahl benötigt macOS.");
+        return (await SaveScreenshotAsync(outputPath, ScreenshotTarget.InteractiveSelection, ct).ConfigureAwait(false)).HasValue;
+    }
+
+    private static async Task<CaptureRegion?> SaveScreenshotAsync(string outputPath, ScreenshotTarget target, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         CheckDesktopAccess();
         outputPath = ValidateNewPath(outputPath, ".png");
         string temporaryPath = TemporaryPathFor(outputPath);
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            CaptureRegion? bounds;
             if (OperatingSystem.IsWindows())
             {
-                await Task.Run(() => WindowsDesktop.SaveScreenshot(temporaryPath), cancellationToken).ConfigureAwait(false);
+                bounds = await Task.Run(() => WindowsDesktop.SaveScreenshot(temporaryPath, target == ScreenshotTarget.VirtualDesktop),
+                    cancellationToken).ConfigureAwait(false);
             }
             else
             {
-                await MacCapture.TakeScreenshotAsync(temporaryPath, cancellationToken).ConfigureAwait(false);
+                bounds = target == ScreenshotTarget.InteractiveSelection
+                    ? await MacCapture.TakeInteractiveSnipAsync(temporaryPath, cancellationToken).ConfigureAwait(false)
+                    : await MacCapture.TakeScreenshotAsync(temporaryPath, cancellationToken).ConfigureAwait(false);
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            File.Move(temporaryPath, outputPath);
+            if (bounds.HasValue) File.Move(temporaryPath, outputPath);
+            return bounds;
         }
         finally
         {

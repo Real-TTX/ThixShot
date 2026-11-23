@@ -95,6 +95,33 @@ public sealed class EditorTests
     }
 
     [Fact]
+    public void Snip_copies_only_the_selected_pixels_at_their_original_resolution()
+    {
+        var folder = Directory.CreateTempSubdirectory("thixshot-snip-");
+        try
+        {
+            string source = Path.Combine(folder.FullName, "Desktop.png");
+            string destination = Path.Combine(folder.FullName, "Ausschnitt.png");
+            using var desktop = new SKBitmap(16, 12);
+            for (int y = 0; y < desktop.Height; y++)
+                for (int x = 0; x < desktop.Width; x++)
+                    desktop.SetPixel(x, y, new SKColor((byte)(13 * x), (byte)(17 * y), 101));
+            using (var png = desktop.Encode(SKEncodedImageFormat.Png, 100))
+            using (var output = File.Create(source)) png.SaveTo(output);
+
+            Assert.Throws<InvalidDataException>(() => ImageOutput.SaveCrop(source, new SKRectI(-1, 2, 8, 6), destination));
+            Assert.False(File.Exists(destination));
+            ImageOutput.SaveCrop(source, new SKRectI(3, 2, 10, 8), destination);
+            using var result = SKBitmap.Decode(destination);
+            Assert.Equal((7, 6), (result.Width, result.Height));
+            for (int y = 0; y < result.Height; y++)
+                for (int x = 0; x < result.Width; x++)
+                    Assert.Equal(desktop.GetPixel(x + 3, y + 2), result.GetPixel(x, y));
+        }
+        finally { folder.Delete(recursive: true); }
+    }
+
+    [Fact]
     public void Stroke_tools_draw_the_selected_color_and_reject_an_accidental_click()
     {
         using var input = TestProfile.TestImage();

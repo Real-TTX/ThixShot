@@ -27,7 +27,7 @@ internal sealed partial class StudioWindow : MatWindow
 
     private readonly DispatcherTimer updateTimer = new() { Interval = TimeSpan.FromHours(6) };
     private string current = "Aufnahmestudio";
-    private bool video, region, focusZoom = true, showCursor = true, systemAudio, busy, allowClose;
+    private bool video, screenshotRegion = true, videoRegion, focusZoom = true, showCursor = true, systemAudio, busy, allowClose;
     private int delay;
     private string search = "";
     private int kind, sort;
@@ -199,15 +199,21 @@ internal sealed partial class StudioWindow : MatWindow
         library.HorizontalAlignment = HorizontalAlignment.Left;
         Grid.SetRow(library,3); main.Children.Add(library);
 
+        var selectRegion = video ? videoRegion : screenshotRegion;
         var preview = new Border { Height = 148, CornerRadius = new CornerRadius(MatTokens.Size.RadiusLg),
-            ClipToBounds = true, Child = new StudioPreview { Region = region, Video = video } };
+            ClipToBounds = true, Child = new StudioPreview { Region = selectRegion, Video = video } };
         var sample = video ? Ui.Button("Beispielvideo anlegen", "edit", () => Run(EditSampleVideoAsync)) :
             Ui.Button("Beispielbild bearbeiten", "edit", () => Run(EditSampleAsync));
         if (video) ToolTip.SetTip(sample,"Demo in die Mediathek übernehmen und ihre Zoomspur bearbeiten");
         sample.HorizontalAlignment = HorizontalAlignment.Left;
         var controls = Ui.Stack(12, preview, sample, Rule(),
             new TextBlock { Text = video ? "Videoaufnahme" : "Screenshot" }.Themed("MatText.SectionTitle"));
-        var source = Ui.Choices(["Gesamter Hauptbildschirm","Bereich auswählen"],region ? 1 : 0, i => { region = i == 1; RefreshPage(); });
+        var source = Ui.Choices(["Gesamter Hauptbildschirm", "Bereich aufziehen"], selectRegion ? 1 : 0, i =>
+        {
+            if (video) videoRegion = i == 1;
+            else screenshotRegion = i == 1;
+            RefreshPage();
+        });
         var timer = Ui.Choices(["Keine Verzögerung","3 Sekunden","5 Sekunden","10 Sekunden"],Array.IndexOf(Delays,delay),i => delay = Delays[i]);
         controls.Children.Add(Ui.Stack(4, new TextBlock { Text = "Aufnahmebereich" }.Themed("MatText.FieldLabel"),source));
         controls.Children.Add(Ui.Stack(4, new TextBlock { Text = "Zeitverzögerung" }.Themed("MatText.FieldLabel"),timer));
@@ -218,6 +224,7 @@ internal sealed partial class StudioWindow : MatWindow
             controls.Children.Add(Ui.Check("Systemton aufnehmen", systemAudio, value => systemAudio = value));
         }
         var capture = Ui.Button(video ? "Aufnahme starten" : "Screenshot erstellen", video ? "record" : "camera", () => Run(CaptureAsync), "primary");
+        if (selectRegion) ToolTip.SetTip(capture, "ThixShot ausblenden und den Bereich direkt auf dem Bildschirm aufziehen.");
         capture.HorizontalAlignment = HorizontalAlignment.Left; controls.Children.Add(capture);
         var inspector = new Border { BorderThickness = new Thickness(1,0,0,0),
             Child = new ScrollViewer { Content = new Border { Padding = new Thickness(20,22), Child = controls } } }
@@ -256,10 +263,20 @@ internal sealed partial class StudioWindow : MatWindow
         using var source = AssetLoader.Open(new Uri("avares://ThixShot/Assets/Studio.jpg"));
         await EditAsync(source, true);
     }
-    private async Task EditAsync(Stream source, bool sample = false, Window? owner = null)
+    private async Task EditAsync(Stream source, bool sample = false)
     {
         var editor = new EditorWindow(source, sample);
-        var path = await editor.ShowDialog<string?>(owner ?? this);
+        string? path;
+        if (readyPalette is null)
+        {
+            if (!IsVisible) Show();
+            path = await editor.ShowDialog<string?>(this);
+        }
+        else
+        {
+            // The floating palette must stay hidden. Its topmost native owner would also raise this editor.
+            path = await editor.ShowStandaloneAsync();
+        }
         if (path != null) { selectedPath = path; ShowMessage($"Gespeichert · {Path.GetFileName(path)}"); }
     }
 }

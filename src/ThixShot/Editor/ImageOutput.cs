@@ -9,6 +9,18 @@ namespace ThixShot.Editor;
 
 internal static class ImageOutput
 {
+    internal static void SaveCrop(string source, SKRectI area, string destination)
+    {
+        using var desktop = SKBitmap.Decode(source) ?? throw new InvalidDataException("Der Bildschirm konnte nicht gelesen werden.");
+        using var crop = new SKBitmap();
+        if (area.Width < 2 || area.Height < 2 || area.Left < 0 || area.Top < 0 ||
+            area.Right > desktop.Width || area.Bottom > desktop.Height || !desktop.ExtractSubset(crop, area))
+            throw new InvalidDataException("Der gewählte Ausschnitt liegt außerhalb der Aufnahme.");
+        using var png = crop.Encode(SKEncodedImageFormat.Png, 100) ?? throw new IOException("Der Ausschnitt konnte nicht gespeichert werden.");
+        using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        png.SaveTo(output);
+    }
+
     public static async Task CopyAsync(IClipboard clipboard, byte[] png)
     {
         // Clipboard contents can be requested after the editor has closed.

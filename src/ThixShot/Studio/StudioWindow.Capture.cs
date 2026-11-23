@@ -61,9 +61,13 @@ internal sealed partial class StudioWindow
             choice.IsChecked = selected;
             return choice;
         }
-        var area = new MenuItem { Header = "Aufnahmebereich" };
-        area.Items.Add(Choice("Gesamter Hauptbildschirm", !region, () => region = false));
-        area.Items.Add(Choice("Bereich auswählen", region, () => region = true));
+        MenuItem AreaMenu(string title, bool selectRegion, Action<bool> setRegion)
+        {
+            var area = new MenuItem { Header = title };
+            area.Items.Add(Choice("Bereich aufziehen", selectRegion, () => setRegion(true)));
+            area.Items.Add(Choice("Gesamter Hauptbildschirm", !selectRegion, () => setRegion(false)));
+            return area;
+        }
         var countdown = new MenuItem { Header = "Zeitverzögerung" };
         foreach (var seconds in Delays)
             countdown.Items.Add(Choice(seconds == 0 ? "Keine Verzögerung" : $"{seconds} Sekunden", delay == seconds, () => delay = seconds));
@@ -71,7 +75,9 @@ internal sealed partial class StudioWindow
         recording.Items.Add(Choice("Fokus-Zoom bei Klicks", focusZoom, () => focusZoom = !focusZoom));
         recording.Items.Add(Choice("Mauszeiger anzeigen", showCursor, () => showCursor = !showCursor));
         recording.Items.Add(Choice("Systemton aufnehmen", systemAudio, () => systemAudio = !systemAudio));
-        menu.Items.Add(area); menu.Items.Add(countdown); menu.Items.Add(recording);
+        menu.Items.Add(AreaMenu("Screenshotbereich", screenshotRegion, value => screenshotRegion = value));
+        menu.Items.Add(AreaMenu("Videobereich", videoRegion, value => videoRegion = value));
+        menu.Items.Add(countdown); menu.Items.Add(recording);
         return menu;
     }
 
@@ -92,54 +98,66 @@ internal sealed partial class StudioWindow
         HideWindow(this);
     }
 
-    private Window CaptureDialogOwner()
+    private void ReturnFromCapture()
     {
-        if (readyPalette != null) { readyPalette.ShowReady(); return readyPalette; }
+        if (readyPalette != null) { readyPalette.ShowReady(); return; }
         if (!IsVisible) Show();
         Activate();
-        return this;
     }
 
-    private Task CaptureAsync() => CaptureAsync(CaptureService.TakeScreenshotAsync);
+    private Task CaptureAsync() => CaptureAsync(TakeScreenshotForEditorAsync);
 
-    internal async Task CaptureAsync(Func<string, CancellationToken, Task> takeScreenshot)
+    private async Task<bool> TakeScreenshotForEditorAsync(string path, CancellationToken token)
+    {
+        if (!screenshotRegion)
+        {
+            await CaptureService.TakeScreenshotAsync(path, token);
+            return true;
+        }
+        if (OperatingSystem.IsMacOS())
+            return await CaptureService.TakeInteractiveSnipAsync(path, token);
+
+        string desktop = MediaLibrary.TemporaryFile(".png");
+        try
+        {
+            var bounds = await CaptureService.TakeVirtualDesktopScreenshotAsync(desktop, token);
+            var area = await SelectionWindow.SelectAsync(Screens, desktop, bounds, token);
+            if (area is not { } crop) return false;
+            await Task.Run(() => ImageOutput.SaveCrop(desktop, crop, path), token);
+            return true;
+        }
+        finally { File.Delete(desktop); }
+    }
+
+    internal async Task CaptureAsync(Func<string, CancellationToken, Task<bool>> takeScreenshot)
     {
         string? screenshot = null;
         try
         {
             HideCaptureWindows();
-            if (!video || region)
-            {
-                if (!video && delay > 0) await CountdownAsync();
-                await Task.Delay(320, lifetime.Token);
-                screenshot = MediaLibrary.TemporaryFile(".png");
-                await takeScreenshot(screenshot, lifetime.Token);
-            }
-            SKRectI? area = null;
-            if (region)
-            {
-                using var source = File.OpenRead(screenshot!);
-                var selection = new SelectionWindow(source);
-                if (Screens.Primary is { } display) selection.Position = display.Bounds.Position;
-                area = await selection.ShowDialog<SKRectI?>(CaptureDialogOwner());
-                if (area == null) return;
-                HideCaptureWindows();
-            }
-            if (video)
+            if (!video)
             {
                 if (delay > 0) await CountdownAsync();
                 await Task.Delay(320, lifetime.Token);
-                await RecordAsync(area);
+                screenshot = MediaLibrary.TemporaryFile(".png");
+                if (!await takeScreenshot(screenshot, lifetime.Token)) return;
+                using var input = File.OpenRead(screenshot);
+                await EditAsync(input);
                 return;
             }
-            var owner = CaptureDialogOwner();
-            using var input = File.OpenRead(screenshot!);
-            if (area is not { } crop) { await EditAsync(input, owner: owner); return; }
-            using var document = new ImageDocument(input);
-            ImageEditor.Add(document, new ImageMark(MarkTool.Crop, new SKPoint(crop.Left,crop.Top), new SKPoint(crop.Right,crop.Bottom), SKColors.White));
-            using var png = ImageEditor.Render(document);
-            using var cropped = png.AsStream();
-            await EditAsync(cropped, owner: owner);
+
+            SKRectI? area = null;
+            if (videoRegion)
+            {
+                await Task.Delay(320, lifetime.Token);
+                screenshot = MediaLibrary.TemporaryFile(".png");
+                await CaptureService.TakeScreenshotAsync(screenshot, lifetime.Token);
+                area = await SelectionWindow.SelectAsync(Screens, screenshot, null, lifetime.Token);
+                if (area == null) return;
+            }
+            if (delay > 0) await CountdownAsync();
+            await Task.Delay(320, lifetime.Token);
+            await RecordAsync(area);
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
@@ -150,7 +168,7 @@ internal sealed partial class StudioWindow
         finally
         {
             if (screenshot != null) File.Delete(screenshot);
-            if (!lifetime.IsCancellationRequested) CaptureDialogOwner();
+            if (!lifetime.IsCancellationRequested) ReturnFromCapture();
         }
     }
 

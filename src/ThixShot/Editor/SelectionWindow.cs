@@ -115,7 +115,9 @@ internal sealed class SelectionWindow : Window
     }
 
     internal static Point SourcePoint(SKRectI tile, Size client, Point position) =>
-        new(tile.Left + position.X * tile.Width / client.Width, tile.Top + position.Y * tile.Height / client.Height);
+        // A DPI conversion can otherwise put an exact pixel infinitesimally on the wrong side of Floor/Ceiling.
+        new(tile.Left + Math.Round(position.X * tile.Width / client.Width, 7),
+            tile.Top + Math.Round(position.Y * tile.Height / client.Height, 7));
 
     internal static SKRectI Selection(Point start, Point end, PixelSize image)
     {

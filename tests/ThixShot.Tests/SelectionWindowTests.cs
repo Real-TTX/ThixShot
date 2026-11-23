@@ -29,6 +29,8 @@ public sealed class SelectionWindowTests
         Assert.Equal(primaryEnd, capturedEnd);
         Assert.Equal(new SKRectI(1800, 300, 2100, 450), SelectionWindow.Selection(start, capturedEnd, image));
         Assert.Equal(SelectionWindow.Selection(start, capturedEnd, image), SelectionWindow.Selection(capturedEnd, start, image));
+        for (var pixel = 0; pixel < 1920; pixel++)
+            Assert.Equal(pixel, SelectionWindow.SourcePoint(left, leftClient, new Point(pixel / 1.5, 0)).X);
         Assert.Throws<InvalidOperationException>(() => SelectionWindow.SourceTile(new PixelRect(0, 0, 2560, 1440), desktop, new PixelSize(1, 1)));
     }
 
@@ -75,6 +77,17 @@ public sealed class SelectionWindowTests
             picker.MouseMove(start);
             picker.MouseDown(start, MouseButton.Left);
             picker.MouseMove(end, RawInputModifiers.LeftMouseButton);
+            if (!cancel)
+            {
+                using var frame = picker.CaptureRenderedFrame();
+                Assert.NotNull(frame);
+                using var encoded = new MemoryStream();
+                frame.Save(encoded);
+                encoded.Position = 0;
+                using var preview = SKBitmap.Decode(encoded);
+                Assert.Equal(SKColors.LightBlue, preview.GetPixel(preview.Width / 2, preview.Height / 2));
+                Assert.InRange(preview.GetPixel(preview.Width / 8, preview.Height / 2).Blue, (byte)50, (byte)200);
+            }
             if (cancel)
                 picker.KeyPressQwerty(PhysicalKey.Escape, RawInputModifiers.None);
             else

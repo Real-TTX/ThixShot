@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 256 256">
+  <!-- ThixShot favicon / small icon (16-32 px): full-bleed tile, the picture as one white block with a mountain, thick corner marks. -->
+  <defs>
+    <clipPath id="picture">
+      <rect x="72" y="78" width="112" height="100" rx="18"/>
+    </clipPath>
+  </defs>
+  <rect x="0" y="0" width="256" height="256" rx="60" fill="#2F6FED"/>
+  <rect x="72" y="78" width="112" height="100" rx="18" fill="#FFFFFF"/>
+  <path d="M64 186L126 126L192 186Z" fill="#163E9E" clip-path="url(#picture)"/>
+  <path d="M36 84V60a24 24 0 0 1 24-24h24M172 36h24a24 24 0 0 1 24 24v24M220 172v24a24 24 0 0 1-24 24h-24M84 220H60a24 24 0 0 1-24-24v-24"
+        fill="none" stroke="#FFFFFF" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

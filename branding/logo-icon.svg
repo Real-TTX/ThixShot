@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!--
+    ThixShot app icon, full detail (48 px and larger): a captured picture (a landscape with the sun) inside the white
+    corner marks of a screen selection, on a blue tile. Geometry on a 256 grid; tools/render-icons.js renders the PNG,
+    ICO and ICNS files from it.
+  -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#5A9CFF"/>
+      <stop offset="1" stop-color="#1E5BE6"/>
+    </linearGradient>
+    <linearGradient id="sheet" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#EAF1FF"/>
+    </linearGradient>
+    <clipPath id="picture">
+      <rect x="66" y="78" width="124" height="100" rx="16"/>
+    </clipPath>
+  </defs>
+  <rect x="16" y="16" width="224" height="224" rx="52" fill="url(#tile)"/>
+  <!-- the captured picture -->
+  <rect x="66" y="78" width="124" height="100" rx="16" fill="url(#sheet)"/>
+  <g clip-path="url(#picture)">
+    <circle cx="104" cy="112" r="13" fill="#FFC857"/>
+    <path d="M58 186L118 130L150 158L166 144L198 176V186Z" fill="#2F6FED" fill-opacity="0.35"/>
+    <path d="M58 186L98 150L138 186Z" fill="#2F6FED"/>
+    <path d="M110 186L158 140L198 180V186Z" fill="#163E9E"/>
+  </g>
+  <!-- the corner marks of the selection -->
+  <path d="M48 84V72a20 20 0 0 1 20-20h12M176 52h12a20 20 0 0 1 20 20v12M208 172v12a20 20 0 0 1-20 20h-12M80 204H68a20 20 0 0 1-20-20v-12"
+        fill="none" stroke="#FFFFFF" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

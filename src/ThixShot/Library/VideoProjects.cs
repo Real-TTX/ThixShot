@@ -1,19 +1,36 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using ThixShot.Capture;
 
 namespace ThixShot.Library;
 
-internal sealed record VideoProject(Guid Revision, bool RecordedWithMaster, long SourceSize, long SourceTimestamp, ZoomPoint[] Zooms);
+/// <summary>
+/// The edits of a recording: its zooms, what happened while it was recorded (<see cref="Activity"/>: clicks and typing, empty for older
+/// recordings) and whether the clicks are drawn as rings (<see cref="ShowClicks"/>).
+/// </summary>
+internal sealed record VideoProject(Guid Revision, bool RecordedWithMaster, long SourceSize, long SourceTimestamp, ZoomPoint[] Zooms,
+    InputEvent[]? Activity = null, bool ShowClicks = true)
+{
+    public InputEvent[] Activity { get; init; } = Activity ?? [];
+
+    /// <summary>The clicks whose rings the rendered video shows.</summary>
+    [JsonIgnore]
+    public InputEvent[] VisibleClicks => ShowClicks ? Activity.Where(a => a.Kind == InputKind.Click).ToArray() : [];
+}
+
+/// <summary>What the video editor saves: zooms, clicks and typing (a removed click is gone), and whether clicks are shown.</summary>
+internal sealed record VideoEdit(IReadOnlyList<ZoomPoint> Zooms, IReadOnlyList<InputEvent> Activity, bool ShowClicks);
 
 /// <summary>The library MP4 is the original. Edits are atomic JSON revisions and each revision owns its rendered MP4.</summary>
 internal static class VideoProjects
 {
     private static string Root => Path.Combine(MediaLibrary.Folder, ".edits");
     private static string Metadata(string path) => Path.Combine(Root, Path.GetFileName(path) + ".json");
+    // Renders of earlier versions: unversioned (zooms without panning), win-mf-v2 (Windows before the click rings).
     private static string UnversionedRender(Guid revision) => Path.Combine(Root, $"{revision:N}.mp4");
-    // Windows renders produced before the stride correction may contain skewed frames.
     private static string WindowsRender(Guid revision) => Path.Combine(Root, $"{revision:N}.win-mf-v2.mp4");
-    private static string Rendered(Guid revision) => OperatingSystem.IsWindows() ? WindowsRender(revision) : UnversionedRender(revision);
+    // Panning between zooms and the click rings: renders before them show something else than the editor.
+    private static string Rendered(Guid revision) => Path.Combine(Root, $"{revision:N}.v3.mp4");
 
     public static VideoProject Read(string path)
     {
@@ -26,24 +43,32 @@ internal static class VideoProjects
         return stored.SourceSize == empty.SourceSize && stored.SourceTimestamp == empty.SourceTimestamp ? stored : empty;
     }
 
-    public static VideoProject Save(string path, VideoProject baseline, IReadOnlyList<ZoomPoint> zooms, bool newRecording = false)
+    /// <summary>Saves the zooms and keeps the clicks, the typing and the click setting as they are.</summary>
+    public static VideoProject Save(string path, VideoProject baseline, IReadOnlyList<ZoomPoint> zooms, bool newRecording = false) =>
+        Save(path, baseline, new VideoEdit(zooms, baseline.Activity, baseline.ShowClicks), newRecording);
+
+    public static VideoProject Save(string path, VideoProject baseline, VideoEdit edit, bool newRecording = false)
     {
         using var writeLock = Acquire();
         var current = Read(path);
         if (current.Revision != baseline.Revision || current.SourceSize != baseline.SourceSize || current.SourceTimestamp != baseline.SourceTimestamp)
             throw new IOException("Die Aufnahme wurde inzwischen geändert. Öffne den Editor erneut.");
-        foreach (var zoom in zooms)
+        foreach (var zoom in edit.Zooms)
         {
             if (!double.IsFinite(zoom.StartSeconds) || zoom.StartSeconds < 0 || !double.IsFinite(zoom.DurationSeconds) || zoom.DurationSeconds <= 0
                 || !double.IsFinite(zoom.X) || zoom.X is < 0 or > 1 || !double.IsFinite(zoom.Y) || zoom.Y is < 0 or > 1
                 || !double.IsFinite(zoom.Scale) || zoom.Scale is < 1 or > 16)
                 throw new ArgumentException("Der Zoom enthält ungültige Zeit- oder Bildkoordinaten.");
         }
+        if (edit.Activity.Any(a => !a.IsValid))
+            throw new ArgumentException("Ein Klick oder eine Eingabe liegt außerhalb der Aufnahme.");
         var updated = current with
         {
             Revision = Guid.NewGuid(),
             RecordedWithMaster = current.RecordedWithMaster || newRecording,
-            Zooms = zooms.OrderBy(z => z.StartSeconds).ToArray()
+            Zooms = edit.Zooms.OrderBy(z => z.StartSeconds).ToArray(),
+            Activity = edit.Activity.OrderBy(a => a.Seconds).ToArray(),
+            ShowClicks = edit.ShowClicks
         };
         var tmp = Path.Combine(Root, updated.Revision + ".tmp");
         try
@@ -59,23 +84,24 @@ internal static class VideoProjects
     public static async Task<string> PlaybackPathAsync(string path, IProgress<double>? progress, CancellationToken ct)
     {
         var project = Read(path);
-        if (project.Zooms.Length == 0) return path;
+        var clicks = project.VisibleClicks;
+        if (project.Zooms.Length == 0 && clicks.Length == 0) return path;
         string rendered = Rendered(project.Revision);
         if (File.Exists(rendered))
         {
-            if (OperatingSystem.IsWindows()) TryDeleteRender(UnversionedRender(project.Revision));
+            RemoveOldRenders(project.Revision);
             return rendered;
         }
         string tmp = MediaLibrary.TemporaryFile(".mp4");
         try
         {
-            await VideoEditService.ExportAsync(path, tmp, project.Zooms, progress, ct).ConfigureAwait(false);
+            await VideoEditService.ExportAsync(path, tmp, project.Zooms, clicks, progress, ct).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
             using var writeLock = await AcquireForRenderAsync(ct).ConfigureAwait(false);
             if (Read(path).Revision != project.Revision)
                 throw new IOException("Die Zoomeinstellungen wurden während des Renderns geändert.");
             if (!File.Exists(rendered)) File.Move(tmp, rendered);
-            if (OperatingSystem.IsWindows()) TryDeleteRender(UnversionedRender(project.Revision));
+            RemoveOldRenders(project.Revision);
             return rendered;
         }
         finally { File.Delete(tmp); }
@@ -101,6 +127,11 @@ internal static class VideoProjects
     private static void RemoveCache(Guid revision)
     {
         if (revision == Guid.Empty) return;
+        RemoveOldRenders(revision);
+        TryDeleteRender(Rendered(revision));
+    }
+    private static void RemoveOldRenders(Guid revision)
+    {
         TryDeleteRender(UnversionedRender(revision));
         TryDeleteRender(WindowsRender(revision));
     }

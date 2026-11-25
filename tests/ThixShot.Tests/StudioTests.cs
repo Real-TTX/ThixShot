@@ -98,6 +98,8 @@ public sealed class StudioTests
     {
         window.UpdateLayout();
         var button = ButtonWithLabel(window, label);
+        button.BringIntoView(); // a button further down in a scrolled side panel
+        window.UpdateLayout();
         var point = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), window)!.Value;
         window.MouseMove(point);
         window.MouseDown(point, MouseButton.Left);

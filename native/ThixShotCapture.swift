@@ -30,8 +30,12 @@ private final class MovieOutput: NSObject, SCStreamOutput, SCStreamDelegate {
     let firstScreenFrame = DispatchSemaphore(value: 0)
     var sessionStart: CMTime?
     var lastVideoTime: CMTime?
-    var zoomPoints = [VideoZoom]()
-    private var wasPressed = false
+    var input = [InputRecord]()
+    private var leftDown = false
+    private var rightDown = false
+    private var lastClick: (x: Double, y: Double)?
+    private var sinceKey = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown)
+    private var lastTyping = -Double.infinity
 
     init(url: URL, width: Int, height: Int, screenRect: CGRect, focus: Bool, sound: Bool, excludedPID: Int32? = nil) throws {
         writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
@@ -84,15 +88,34 @@ private final class MovieOutput: NSObject, SCStreamOutput, SCStreamDelegate {
         catch { fail(error) }
     }
 
-    func collectClick() {
+    // Clicks and keystrokes (never which key), polled every frame like InputRecorder on Windows (WindowsRecording.cs).
+    // A keystroke is placed at the last click, else at the mouse pointer. Asking for the time since the last key needs no
+    // input monitoring permission.
+    func collectInput() {
         guard let start = sessionStart else { return }
-        let pressed = CGEventSource.buttonState(.combinedSessionState, button: .left)
-        if pressed && !wasPressed, let point = CGEvent(source: nil)?.location, screenRect.contains(point), !hitsRecordingControl(point) {
-            zoomPoints.append(VideoZoom(startSeconds: max(0, (CMClockGetTime(CMClockGetHostTimeClock()) - start).seconds),
-                durationSeconds: 2, x: (point.x - screenRect.minX) / screenRect.width,
-                y: (point.y - screenRect.minY) / screenRect.height, scale: 1.55))
+        let seconds = max(0, (CMClockGetTime(CMClockGetHostTimeClock()) - start).seconds)
+        let left = CGEventSource.buttonState(.combinedSessionState, button: .left)
+        let right = CGEventSource.buttonState(.combinedSessionState, button: .right)
+        if (left && !leftDown) || (right && !rightDown), let point = CGEvent(source: nil)?.location,
+           screenRect.contains(point), !hitsRecordingControl(point) {
+            let place = relative(point)
+            input.append(InputRecord(seconds: seconds, kind: "Click", x: place.x, y: place.y))
+            lastClick = place
         }
-        wasPressed = pressed
+        leftDown = left
+        rightDown = right
+        let since = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown)
+        defer { sinceKey = since }
+        guard since < sinceKey, seconds - lastTyping >= 0.2 else { return }
+        var place = lastClick
+        if place == nil, let point = CGEvent(source: nil)?.location, screenRect.contains(point) { place = relative(point) }
+        guard let found = place else { return }
+        input.append(InputRecord(seconds: seconds, kind: "Typing", x: min(max(found.x, 0), 1), y: min(max(found.y, 0), 1)))
+        lastTyping = seconds
+    }
+
+    private func relative(_ point: CGPoint) -> (x: Double, y: Double) {
+        (x: Double((point.x - screenRect.minX) / screenRect.width), y: Double((point.y - screenRect.minY) / screenRect.height))
     }
 
     private func hitsRecordingControl(_ point: CGPoint) -> Bool {
@@ -236,12 +259,11 @@ private enum CaptureHelper {
         try stream.addStreamOutput(movie, type: .screen, sampleHandlerQueue: queue)
         if config.capturesAudio { try stream.addStreamOutput(movie, type: .audio, sampleHandlerQueue: queue) }
         try await stream.startCapture()
-        // Record editing suggestions separately, including clicks on an unchanged screen.
+        // Clicks and typing are always recorded beside the video (the editor shows them and makes zooms from them),
+        // including clicks on an unchanged screen.
         let animation = DispatchSource.makeTimerSource(queue: queue)
-        if movie.focusEnabled {
-            animation.setEventHandler { movie.collectClick() }
-            animation.schedule(deadline: .now(), repeating: .milliseconds(33))
-        }
+        animation.setEventHandler { movie.collectInput() }
+        animation.schedule(deadline: .now(), repeating: .milliseconds(33))
         animation.resume()
         let firstFrame = movie.firstScreenFrame
         let started = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
@@ -258,6 +280,6 @@ private enum CaptureHelper {
         try await stream.stopCapture()
         queue.sync {}
         try await movie.finish(at: CMClockGetTime(CMClockGetHostTimeClock()))
-        FileHandle.standardOutput.write(try JSONEncoder().encode(movie.zoomPoints))
+        FileHandle.standardOutput.write(try JSONEncoder().encode(movie.input))
     }
 }

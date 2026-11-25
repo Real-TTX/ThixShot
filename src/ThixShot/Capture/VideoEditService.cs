@@ -27,27 +27,45 @@ public static class VideoEditService
         double.IsFinite(p.DurationSeconds) && p.DurationSeconds > 0 && p.X is >= 0 and <= 1 &&
         p.Y is >= 0 and <= 1 && p.Scale is >= 1 and <= 16;
 
+    /// <summary>How long a zoom takes to come in and to go (seconds); two zooms that overlap by this much pan from one to the other.</summary>
+    public const double Edge = 0.5;
+
+    /// <summary>
+    /// The part of the picture shown at a moment. Every zoom has a weight that rises over its first <see cref="Edge"/> seconds
+    /// and falls over its last; the picture moves to the weighted mean of the zooms by the sum of their weights (at most 1).
+    /// One zoom alone comes in and goes; two zooms that overlap by one edge pan from the first place to the second without
+    /// zooming out. native/VideoEditing.swift computes the same.
+    /// </summary>
     internal static (double X, double Y, double Width, double Height) ViewportAtSorted(double seconds, IEnumerable<ZoomPoint> points)
     {
-        double x = 0, y = 0, size = 1;
+        double weights = 0, x = 0, y = 0, size = 0;
         foreach (var point in points)
         {
             double age = seconds - point.StartSeconds;
             if (age < 0) break;
             if (age >= point.DurationSeconds) continue;
-            double edge = Math.Min(0.35, point.DurationSeconds / 2);
+            double edge = Math.Min(Edge, point.DurationSeconds / 2);
             double t = Math.Min(1, Math.Min(age, point.DurationSeconds - age) / edge);
             double weight = t * t * (3 - 2 * t);
             double targetSize = 1 / point.Scale;
-            x += (Math.Clamp(point.X - targetSize / 2, 0, 1 - targetSize) - x) * weight;
-            y += (Math.Clamp(point.Y - targetSize / 2, 0, 1 - targetSize) - y) * weight;
-            size += (targetSize - size) * weight;
+            weights += weight;
+            x += Math.Clamp(point.X - targetSize / 2, 0, 1 - targetSize) * weight;
+            y += Math.Clamp(point.Y - targetSize / 2, 0, 1 - targetSize) * weight;
+            size += targetSize * weight;
         }
-        return (x, y, size, size);
+        if (weights <= 0) return (0, 0, 1, 1);
+        double strength = Math.Min(1, weights);
+        double shown = 1 + (size / weights - 1) * strength;
+        return (x / weights * strength, y / weights * strength, shown, shown);
     }
 
+    public static Task ExportAsync(string sourcePath, string targetPath, IReadOnlyList<ZoomPoint> zoomPoints,
+        IProgress<double>? progress = null, CancellationToken cancellationToken = default) =>
+        ExportAsync(sourcePath, targetPath, zoomPoints, [], progress, cancellationToken);
+
+    /// <summary>Renders the zooms and, for every click in <paramref name="clicks"/>, its ring (<see cref="ClickEffect"/>).</summary>
     public static async Task ExportAsync(string sourcePath, string targetPath, IReadOnlyList<ZoomPoint> zoomPoints,
-        IProgress<double>? progress = null, CancellationToken cancellationToken = default)
+        IReadOnlyList<InputEvent> clicks, IProgress<double>? progress = null, CancellationToken cancellationToken = default)
     {
         sourcePath = RequireSource(sourcePath);
         targetPath = Path.GetFullPath(targetPath);
@@ -58,13 +76,14 @@ public static class VideoEditService
         if (points.Any(p => !IsValid(p)))
             throw new ArgumentException("Die Zoomspur enthält einen ungültigen Ausschnitt.", nameof(zoomPoints));
         points = points.OrderBy(p => p.StartSeconds).ToArray();
+        var rings = clicks.Where(c => c.Kind == InputKind.Click && c.IsValid).OrderBy(c => c.Seconds).ToArray();
         cancellationToken.ThrowIfCancellationRequested();
         string directory = Path.GetDirectoryName(targetPath)!;
         Directory.CreateDirectory(directory);
         string temporary = Path.Combine(directory, $".thixshot-export-{Guid.NewGuid():N}.mp4");
         try
         {
-            if (points.Length == 0)
+            if (points.Length == 0 && rings.Length == 0)
             {
                 await using var input = File.OpenRead(sourcePath);
                 await using var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None);
@@ -74,8 +93,8 @@ public static class VideoEditService
             {
                 await Task.Run(async () =>
                 {
-                    if (OperatingSystem.IsWindows()) WindowsVideoEditor.Export(sourcePath, temporary, points, progress, cancellationToken);
-                    else await MacVideoEditor.ExportAsync(sourcePath, temporary, points, progress, cancellationToken).ConfigureAwait(false);
+                    if (OperatingSystem.IsWindows()) WindowsVideoEditor.Export(sourcePath, temporary, points, rings, progress, cancellationToken);
+                    else await MacVideoEditor.ExportAsync(sourcePath, temporary, points, rings, progress, cancellationToken).ConfigureAwait(false);
                 }, cancellationToken).ConfigureAwait(false);
             }
             cancellationToken.ThrowIfCancellationRequested();

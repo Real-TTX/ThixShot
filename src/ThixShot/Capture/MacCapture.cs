@@ -78,7 +78,7 @@ internal static class MacCapture
     [DllImport(CoreGraphics)] [return: MarshalAs(UnmanagedType.I1)] private static extern bool CGRequestScreenCaptureAccess();
     private static UnauthorizedAccessException ScreenAccessDenied() => new("Erlaube ThixShot in den macOS-Systemeinstellungen unter Datenschutz & Sicherheit die Bildschirm- und Systemaudioaufnahme. Öffne ThixShot anschließend erneut.");
 
-    public static async Task<IReadOnlyList<ZoomPoint>> RecordAsync(string path, RecordingOptions options, Task stop, TaskCompletionSource ready)
+    public static async Task<IReadOnlyList<InputEvent>> RecordAsync(string path, RecordingOptions options, Task stop, TaskCompletionSource ready)
     {
         var args = new List<string> { "record", path, Environment.ProcessId.ToString(CultureInfo.InvariantCulture),
             options.FocusZoom ? "1" : "0", options.ShowCursor ? "1" : "0", options.SystemAudio ? "1" : "0" };
@@ -99,7 +99,7 @@ internal static class MacCapture
                 throw new IOException("Die Bildschirmaufnahme konnte nicht gestartet werden.");
             }
             ready.TrySetResult();
-            var zooms = process.StandardOutput.ReadToEndAsync();
+            var activity = process.StandardOutput.ReadToEndAsync();
             if (await Task.WhenAny(stop, exit).ConfigureAwait(false) == stop && !process.HasExited)
             {
                 await process.StandardInput.WriteLineAsync("stop").ConfigureAwait(false);
@@ -107,7 +107,8 @@ internal static class MacCapture
             }
             await exit.WaitAsync(TimeSpan.FromSeconds(25)).ConfigureAwait(false);
             CheckResult(process, await error.ConfigureAwait(false));
-            return JsonSerializer.Deserialize<ZoomPoint[]>(await zooms.ConfigureAwait(false), JsonSerializerOptions.Web) ?? [];
+            var events = JsonSerializer.Deserialize<InputEvent[]>(await activity.ConfigureAwait(false), JsonSerializerOptions.Web) ?? [];
+            return events.Where(e => e.IsValid).ToArray();
         }
         finally
         {

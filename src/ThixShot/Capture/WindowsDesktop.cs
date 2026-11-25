@@ -187,6 +187,38 @@ internal sealed class WindowsDesktop : IDisposable
         GetWindowThreadProcessId(handle, out var pid);
         return pid == Environment.ProcessId;
     }
+    /// <summary>Whether a ThixShot window has the keyboard (its own shortcuts are no typing in the recording).</summary>
+    internal static bool IsThixShotInFront()
+    {
+        nint front = GetForegroundWindow();
+        if (front == 0) return false;
+        GetWindowThreadProcessId(front, out var pid);
+        return pid == Environment.ProcessId;
+    }
+
+    /// <summary>The text cursor of the window in front, on the screen, when its program shows a system caret (most Windows programs and browsers do).</summary>
+    internal static PointerPosition? TextCursor()
+    {
+        nint front = GetForegroundWindow();
+        if (front == 0) return null;
+        var info = new GuiThreadInfo { Size = Marshal.SizeOf<GuiThreadInfo>() };
+        uint thread = GetWindowThreadProcessId(front, out _);
+        if (!GetGUIThreadInfo(thread, ref info) || info.Caret == 0 || info.CaretRight <= info.CaretLeft && info.CaretBottom <= info.CaretTop) return null;
+        var point = new PointerPosition { X = info.CaretLeft, Y = (info.CaretTop + info.CaretBottom) / 2 };
+        return ClientToScreen(info.Caret, ref point) ? point : null;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GuiThreadInfo
+    {
+        public int Size, Flags;
+        public nint Active, Focus, Capture, MenuOwner, MoveSize, Caret;
+        public int CaretLeft, CaretTop, CaretRight, CaretBottom;
+    }
+
+    [DllImport("user32")] private static extern nint GetForegroundWindow();
+    [DllImport("user32")] private static extern bool GetGUIThreadInfo(uint thread, ref GuiThreadInfo info);
+    [DllImport("user32")] private static extern bool ClientToScreen(nint window, ref PointerPosition point);
     [DllImport("user32")] private static extern nint WindowFromPoint(PointerPosition point);
     [DllImport("user32")] private static extern uint GetWindowThreadProcessId(nint handle, out uint process);
     [DllImport("user32")] internal static extern short GetAsyncKeyState(int key);

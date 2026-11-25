@@ -52,31 +52,26 @@ public sealed class VideoProjectTests
             var point = new ZoomPoint(1, 2, .5, .5, 1.55);
             var project = VideoProjects.Save(path, VideoProjects.Read(path), [point], true);
             var directory = Path.Combine(MediaLibrary.Folder, ".edits");
-            var oldRender = Path.Combine(directory, $"{project.Revision:N}.mp4");
-            File.WriteAllBytes(oldRender, [1, 2, 3]);
+            // Renders of earlier versions (zooms without panning, no click rings) are never shown again.
+            var oldRenders = new[] { $"{project.Revision:N}.mp4", $"{project.Revision:N}.win-mf-v2.mp4" }.Select(name => Path.Combine(directory, name)).ToArray();
+            foreach (var old in oldRenders) File.WriteAllBytes(old, [1, 2, 3]);
 
-            if (OperatingSystem.IsWindows())
+            using (var canceled = new CancellationTokenSource())
             {
-                using var canceled = new CancellationTokenSource();
                 canceled.Cancel();
                 await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
                     VideoProjects.PlaybackPathAsync(path, null, canceled.Token));
-                Assert.True(File.Exists(oldRender));
-                var corrected = Path.Combine(directory, $"{project.Revision:N}.win-mf-v2.mp4");
-                File.WriteAllBytes(corrected, [4, 5, 6]);
-                Assert.Equal(corrected, await VideoProjects.PlaybackPathAsync(path, null, default));
-                Assert.False(File.Exists(oldRender));
-                // Older builds may regenerate their unversioned cache after the upgrade.
-                File.WriteAllBytes(oldRender, [7, 8, 9]);
-                Assert.Equal(corrected, await VideoProjects.PlaybackPathAsync(path, null, default));
-                Assert.Equal(new byte[] { 4, 5, 6 }, File.ReadAllBytes(corrected));
-                Assert.False(File.Exists(oldRender));
             }
-            else
-            {
-                Assert.Equal(oldRender, await VideoProjects.PlaybackPathAsync(path, null, default));
-                Assert.True(File.Exists(oldRender));
-            }
+            Assert.All(oldRenders, old => Assert.True(File.Exists(old)));
+            var current = Path.Combine(directory, $"{project.Revision:N}.v3.mp4");
+            File.WriteAllBytes(current, [4, 5, 6]);
+            Assert.Equal(current, await VideoProjects.PlaybackPathAsync(path, null, default));
+            Assert.All(oldRenders, old => Assert.False(File.Exists(old)));
+            // Older builds may regenerate their cache after the upgrade.
+            File.WriteAllBytes(oldRenders[0], [7, 8, 9]);
+            Assert.Equal(current, await VideoProjects.PlaybackPathAsync(path, null, default));
+            Assert.Equal(new byte[] { 4, 5, 6 }, File.ReadAllBytes(current));
+            Assert.False(File.Exists(oldRenders[0]));
             var after = VideoProjects.Read(path);
             Assert.Equal(project.Revision, after.Revision);
             Assert.Equal(point, Assert.Single(after.Zooms));

@@ -11,6 +11,45 @@ struct VideoZoom: Codable {
     let scale: Double
 }
 
+// A click or a keystroke of a recording (InputEvent in C#): kind "Click" or "Typing", position 0..1 from the upper left.
+struct InputRecord: Codable {
+    let seconds: Double
+    let kind: String
+    let x: Double
+    let y: Double
+}
+
+// A click whose ring the export draws.
+struct ClickMark: Codable {
+    let seconds: Double
+    let x: Double
+    let y: Double
+}
+
+// What MacVideoEditor.ExportAsync sends: the zooms and the clicks.
+private struct ExportPlan: Codable {
+    let zooms: [VideoZoom]
+    let clicks: [ClickMark]
+}
+
+// ClickEffect in AutoZoom.cs: the same timing, size and colours.
+private enum ClickEffect {
+    static let duration = 0.6, radius = 0.03
+    static let red = 0x2F / 255.0, green = 0x6F / 255.0, blue = 0xED / 255.0
+    static let fillAlpha = 70 / 255.0, ringAlpha = 235 / 255.0, haloAlpha = 210 / 255.0
+    static let ringWidth = 0.16, haloWidth = 0.07
+
+    static func at(_ seconds: Double, _ clicks: [ClickMark]) -> [(x: Double, y: Double, radius: Double, opacity: Double)] {
+        clicks.compactMap { click in
+            let age = seconds - click.seconds
+            guard age >= 0, age < duration else { return nil }
+            let progress = age / duration
+            let grow = 1 - pow(1 - progress, 3)
+            return (click.x, click.y, radius * (0.35 + 0.65 * grow), pow(1 - progress, 1.5))
+        }
+    }
+}
+
 private struct MovieInfo: Codable {
     let durationSeconds: Double
     let width: Int
@@ -41,8 +80,8 @@ enum VideoEditing {
             guard CGImageDestinationFinalize(destination) else { throw CaptureError("Das Vorschaubild konnte nicht gespeichert werden.") }
         case "export":
             guard args.count == 3 else { throw CaptureError("Das Exportziel fehlt.") }
-            let points = try JSONDecoder().decode([VideoZoom].self, from: FileHandle.standardInput.readDataToEndOfFile())
-            try await export(asset: asset, target: URL(fileURLWithPath: args[2]), points: points, report: true)
+            let plan = try JSONDecoder().decode(ExportPlan.self, from: FileHandle.standardInput.readDataToEndOfFile())
+            try await export(asset: asset, target: URL(fileURLWithPath: args[2]), points: plan.zooms, clicks: plan.clicks, report: true)
         default: throw CaptureError("Unbekannter Videobefehl.")
         }
     }
@@ -57,26 +96,67 @@ enum VideoEditing {
         return MovieInfo(durationSeconds: duration, width: Int(bounds.width.rounded()), height: Int(bounds.height.rounded()))
     }
 
-    // Match VideoEditService.ViewportAtSorted. Points use an upper-left origin; Core Image uses lower-left.
-    private static func viewport(_ seconds: Double, _ points: [VideoZoom], _ extent: CGRect) -> CGRect {
-        var x = 0.0, y = 0.0, size = 1.0
+    // Match VideoEditService.ViewportAtSorted: the weighted mean of the zooms by the sum of their weights (at most 1), so two
+    // zooms that overlap by one edge pan. Returns the part of the picture as 0..1 from the upper left.
+    private static func viewport(_ seconds: Double, _ points: [VideoZoom]) -> (x: Double, y: Double, size: Double) {
+        var weights = 0.0, x = 0.0, y = 0.0, size = 0.0
         for point in points {
             let age = seconds - point.startSeconds
             if age < 0 { break }
             if age >= point.durationSeconds { continue }
-            let edge = min(0.35, point.durationSeconds / 2)
+            let edge = min(0.5, point.durationSeconds / 2)
             let fraction = min(1, min(age, point.durationSeconds - age) / edge)
             let weight = fraction * fraction * (3 - 2 * fraction)
             let target = 1 / point.scale
-            x += (min(1 - target, max(0, point.x - target / 2)) - x) * weight
-            y += (min(1 - target, max(0, point.y - target / 2)) - y) * weight
-            size += (target - size) * weight
+            weights += weight
+            x += min(1 - target, max(0, point.x - target / 2)) * weight
+            y += min(1 - target, max(0, point.y - target / 2)) * weight
+            size += target * weight
         }
-        return CGRect(x: extent.minX + extent.width * x, y: extent.minY + extent.height * (1 - y - size),
-                      width: extent.width * size, height: extent.height * size)
+        if weights <= 0 { return (0, 0, 1) }
+        let strength = min(1, weights)
+        return (x / weights * strength, y / weights * strength, 1 + (size / weights - 1) * strength)
     }
 
-    private static func export(asset: AVAsset, target: URL, points: [VideoZoom], report: Bool) async throws {
+    // Core Image uses a lower-left origin.
+    private static func crop(_ view: (x: Double, y: Double, size: Double), _ extent: CGRect) -> CGRect {
+        CGRect(x: extent.minX + extent.width * view.x, y: extent.minY + extent.height * (1 - view.y - view.size),
+               width: extent.width * view.size, height: extent.height * view.size)
+    }
+
+    // The rings of the clicks visible at this moment, drawn into the rendered BGRA frame (upper-left coordinates flipped).
+    private static func drawClicks(_ seconds: Double, _ clicks: [ClickMark], view: (x: Double, y: Double, size: Double),
+                                   into pixels: CVPixelBuffer, width: Int, height: Int) {
+        let rings = ClickEffect.at(seconds, clicks)
+        if rings.isEmpty { return }
+        CVPixelBufferLockBaseAddress(pixels, [])
+        defer { CVPixelBufferUnlockBaseAddress(pixels, []) }
+        guard let base = CVPixelBufferGetBaseAddress(pixels),
+              let context = CGContext(data: base, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: CVPixelBufferGetBytesPerRow(pixels), space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return }
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
+        let shorter = Double(min(width, height))
+        for ring in rings {
+            let r = ring.radius * shorter / view.size
+            let cx = (ring.x - view.x) / view.size * Double(width), cy = (ring.y - view.y) / view.size * Double(height)
+            let stroke = max(1.5, r * ClickEffect.ringWidth), halo = max(1, r * ClickEffect.haloWidth)
+            let circle = CGRect(x: cx - r, y: cy - r, width: 2 * r, height: 2 * r)
+            context.setFillColor(red: ClickEffect.red, green: ClickEffect.green, blue: ClickEffect.blue, alpha: ClickEffect.fillAlpha * ring.opacity)
+            context.fillEllipse(in: circle)
+            context.setStrokeColor(red: ClickEffect.red, green: ClickEffect.green, blue: ClickEffect.blue, alpha: ClickEffect.ringAlpha * ring.opacity)
+            context.setLineWidth(stroke)
+            context.strokeEllipse(in: circle)
+            let outer = r + stroke / 2 + halo / 2
+            context.setStrokeColor(red: 1, green: 1, blue: 1, alpha: ClickEffect.haloAlpha * ring.opacity)
+            context.setLineWidth(halo)
+            context.strokeEllipse(in: CGRect(x: cx - outer, y: cy - outer, width: 2 * outer, height: 2 * outer))
+        }
+    }
+
+    private static func export(asset: AVAsset, target: URL, points: [VideoZoom], clicks: [ClickMark], report: Bool) async throws {
         let info = try await inspect(asset)
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else { throw CaptureError("Die Videospur fehlt.") }
         let transform = try await videoTrack.load(.preferredTransform)
@@ -135,10 +215,12 @@ enum VideoEditing {
                 guard let pool = adaptor.pixelBufferPool, CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pixels) == kCVReturnSuccess, let pixels else {
                     throw CaptureError("Der Exportpuffer ist nicht verfügbar.")
                 }
-                let crop = viewport(time.seconds, points, current.extent)
-                let image = current.cropped(to: crop).transformed(by: CGAffineTransform(translationX: -crop.minX, y: -crop.minY))
-                    .transformed(by: CGAffineTransform(scaleX: outputBounds.width / crop.width, y: outputBounds.height / crop.height))
+                let view = viewport(time.seconds, points)
+                let area = crop(view, current.extent)
+                let image = current.cropped(to: area).transformed(by: CGAffineTransform(translationX: -area.minX, y: -area.minY))
+                    .transformed(by: CGAffineTransform(scaleX: outputBounds.width / area.width, y: outputBounds.height / area.height))
                 context.render(image, to: pixels, bounds: outputBounds, colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+                drawClicks(time.seconds, clicks, view: view, into: pixels, width: width, height: height)
                 guard adaptor.append(pixels, withPresentationTime: time) else { throw writer.error ?? CaptureError("Ein Videobild konnte nicht gespeichert werden.") }
             }
             if report && number % 6 == 0 {
@@ -204,7 +286,7 @@ enum VideoEditing {
         }
         let input = AVURLAsset(url: original)
         try await export(asset: input, target: output,
-                         points: [VideoZoom(startSeconds: 0, durationSeconds: 0.2, x: 0.5, y: 0, scale: 2)], report: false)
+                         points: [VideoZoom(startSeconds: 0, durationSeconds: 0.2, x: 0.5, y: 0, scale: 2)], clicks: [], report: false)
         let asset = AVURLAsset(url: output)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.requestedTimeToleranceAfter = .zero

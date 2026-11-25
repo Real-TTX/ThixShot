@@ -72,7 +72,7 @@ internal sealed partial class StudioWindow
         foreach (var seconds in Delays)
             countdown.Items.Add(Choice(seconds == 0 ? "Keine Verzögerung" : $"{seconds} Sekunden", delay == seconds, () => delay = seconds));
         var recording = new MenuItem { Header = "Videooptionen" };
-        recording.Items.Add(Choice("Fokus-Zoom bei Klicks", focusZoom, () => focusZoom = !focusZoom));
+        recording.Items.Add(Choice("Fokus-Zoom bei Klicks und Tippen", focusZoom, () => focusZoom = !focusZoom));
         recording.Items.Add(Choice("Mauszeiger anzeigen", showCursor, () => showCursor = !showCursor));
         recording.Items.Add(Choice("Systemton aufnehmen", systemAudio, () => systemAudio = !systemAudio));
         menu.Items.Add(AreaMenu("Screenshotbereich", screenshotRegion, value => screenshotRegion = value));
@@ -290,7 +290,7 @@ internal sealed partial class StudioWindow
             await Task.WhenAny(stop.Task, session.Completion);
             timer.Stop(); timerLabel.Text = "Speichert …";
             await session.StopAsync();
-            await SaveRecordingProjectAsync(path, session.ZoomPoints);
+            await SaveRecordingProjectAsync(path, session.Activity, focusZoom);
             if (readyPalette is null)
             {
                 current = destinations[1];

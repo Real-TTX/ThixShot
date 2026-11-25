@@ -11,6 +11,9 @@ internal sealed class VideoCanvas : Control
 {
     private Bitmap? frame;
     public IReadOnlyList<ZoomPoint> Zooms { get; set; } = [];
+
+    /// <summary>The clicks whose rings are drawn (empty when the clicks are hidden).</summary>
+    public IReadOnlyList<InputEvent> Clicks { get; set; } = [];
     public double Seconds { get; set; }
     public ZoomPoint? Target { get; set; }
     public Action<double, double>? PlaceTarget { get; set; }
@@ -41,6 +44,7 @@ internal sealed class VideoCanvas : Control
             var size = frame.Size;
             context.DrawImage(frame, new Rect(viewport.X * size.Width, viewport.Y * size.Height,
                 viewport.Width * size.Width, viewport.Height * size.Height), dest);
+            using (context.PushClip(dest)) DrawClicks(context, dest, viewport);
             return;
         }
         context.DrawImage(frame, dest);
@@ -60,6 +64,23 @@ internal sealed class VideoCanvas : Control
             context.DrawEllipse(new SolidColorBrush(Colors.Black, .45), pen, focus, 8, 8);
             context.DrawLine(pen, focus - new Vector(12, 0), focus + new Vector(12, 0));
             context.DrawLine(pen, focus - new Vector(0, 12), focus + new Vector(0, 12));
+        }
+    }
+
+    // The rings of ClickEffect as the export draws them: in the zoomed picture, growing with the zoom.
+    private void DrawClicks(DrawingContext context, Rect dest, (double X, double Y, double Width, double Height) viewport)
+    {
+        if (Clicks.Count == 0) return;
+        var color = Color.FromRgb(ClickEffect.Red, ClickEffect.Green, ClickEffect.Blue);
+        foreach (var (x, y, radius, opacity) in ClickEffect.At(Seconds, Clicks))
+        {
+            double r = radius * Math.Min(dest.Width, dest.Height) / viewport.Width;
+            var center = new Point(dest.X + (x - viewport.X) / viewport.Width * dest.Width, dest.Y + (y - viewport.Y) / viewport.Height * dest.Height);
+            double stroke = Math.Max(1.5, r * ClickEffect.RingWidth), halo = Math.Max(1, r * ClickEffect.HaloWidth);
+            context.DrawEllipse(new SolidColorBrush(color, ClickEffect.FillAlpha / 255 * opacity), null, center, r, r);
+            context.DrawEllipse(null, new Pen(new SolidColorBrush(color, ClickEffect.RingAlpha / 255 * opacity), stroke), center, r, r);
+            double outer = r + stroke / 2 + halo / 2;
+            context.DrawEllipse(null, new Pen(new SolidColorBrush(Colors.White, ClickEffect.HaloAlpha / 255 * opacity), halo), center, outer, outer);
         }
     }
 

@@ -10,20 +10,31 @@ namespace ThixShot.Studio;
 
 internal sealed partial class StudioWindow
 {
-    private async Task SaveRecordingProjectAsync(string unzoomedPath, IReadOnlyList<ZoomPoint> initialZooms)
+    // The clicks and the typing stay with the recording (shown as rings and on the timeline, editable later); with Fokus-Zoom
+    // they also become the first zooms.
+    private async Task SaveRecordingProjectAsync(string unzoomedPath, IReadOnlyList<InputEvent> activity, bool autoZoom)
     {
         var path = MediaLibrary.Import(unzoomedPath, "Video");
         selectedPath = path;
-        var zooms = initialZooms;
-        if (initialZooms.Count > 0)
+        IReadOnlyList<ZoomPoint> zooms = [];
+        if (activity.Count > 0)
         {
             var media = await VideoEditService.InspectAsync(path, lifetime.Token);
-            zooms = initialZooms.Where(z => media.DurationSeconds - z.StartSeconds > .01)
-                .Select(z => z with { DurationSeconds = Math.Min(z.DurationSeconds, media.DurationSeconds - z.StartSeconds) }).ToArray();
+            activity = activity.Where(a => a.Seconds < media.DurationSeconds).ToArray();
+            if (autoZoom) zooms = AutoZoom.Build(activity, media.DurationSeconds);
         }
-        VideoProjects.Save(path, VideoProjects.Read(path), zooms, newRecording: true);
-        ShowMessage("Video gespeichert. Zooms lassen sich unter „Video bearbeiten“ in der Mediathek ändern.");
+        VideoProjects.Save(path, VideoProjects.Read(path), new VideoEdit(zooms, activity, ShowClicks: true), newRecording: true);
+        ShowMessage("Video gespeichert. Zooms und Klicks lassen sich unter „Video bearbeiten“ in der Mediathek ändern.");
     }
+
+    // What the demo clip shows: a click at the lower right, typing there, then a click at the upper left.
+    internal static readonly InputEvent[] DemoActivity =
+    [
+        new(1.3, InputKind.Click, .773, .665),
+        new(1.7, InputKind.Typing, .773, .665), new(1.9, InputKind.Typing, .773, .665), new(2.1, InputKind.Typing, .773, .665),
+        new(2.5, InputKind.Typing, .773, .665),
+        new(3.9, InputKind.Click, .141, .191)
+    ];
 
     private async Task EditSampleVideoAsync()
     {
@@ -34,8 +45,7 @@ internal sealed partial class StudioWindow
             await using (var target = File.Create(temp)) await source.CopyToAsync(target, lifetime.Token);
             string path = MediaLibrary.Import(temp, "Studio-Demo");
             selectedPath = path;
-            var demo = new[] { new ZoomPoint(1.05, 1.65, .773, .665, 1.7), new ZoomPoint(3.75, 1.65, .141, .191, 1.8) };
-            VideoProjects.Save(path, VideoProjects.Read(path), demo, newRecording: true);
+            VideoProjects.Save(path, VideoProjects.Read(path), new VideoEdit(AutoZoom.Build(DemoActivity, 6), DemoActivity, ShowClicks: true), newRecording: true);
             var item = MediaLibrary.List().First(media => media.Path == path);
             await EditVideoAsync(item);
         }

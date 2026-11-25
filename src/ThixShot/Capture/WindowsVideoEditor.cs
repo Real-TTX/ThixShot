@@ -25,7 +25,7 @@ internal static class WindowsVideoEditor
         return encoded.ToArray();
     }
 
-    public static void Export(string path, string output, ZoomPoint[] points, IProgress<double>? progress, CancellationToken token)
+    public static void Export(string path, string output, ZoomPoint[] points, InputEvent[] clicks, IProgress<double>? progress, CancellationToken token)
     {
         using var source = new VideoSource(path);
         long duration = TimeSpan.FromSeconds(source.Info.DurationSeconds).Ticks;
@@ -47,6 +47,7 @@ internal static class WindowsVideoEditor
             var crop = SKRect.Create((float)(rect.X * frame.Width), (float)(rect.Y * frame.Height),
                 (float)(rect.Width * frame.Width), (float)(rect.Height * frame.Height));
             canvas.DrawBitmap(frame, crop, SKRect.Create(width, height), paint);
+            DrawClicks(canvas, time / (double)TimeSpan.TicksPerSecond, clicks, frame.Width, frame.Height, crop, width / crop.Width);
             using var buffer = MediaFactory.MFCreateMemoryBuffer(rendered.ByteCount);
             buffer.Lock(out var ptr, out _, out _);
             try { CopyMemory(ptr, rendered.GetPixels(), (nuint)rendered.ByteCount); }
@@ -60,6 +61,31 @@ internal static class WindowsVideoEditor
         audio?.CopyThrough(writer, long.MaxValue, token);
         writer.Finalize();
     }
+
+    // The ring of every click visible at this moment (ClickEffect), in the picture after the zoom.
+    private static void DrawClicks(SKCanvas canvas, double seconds, InputEvent[] clicks, int frameWidth, int frameHeight, SKRect crop, float scale)
+    {
+        if (clicks.Length == 0) return;
+        using var fill = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill };
+        using var ring = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke };
+        foreach (var (x, y, radius, opacity) in ClickEffect.At(seconds, clicks))
+        {
+            float r = (float)(radius * Math.Min(frameWidth, frameHeight)) * scale;
+            var center = new SKPoint(((float)(x * frameWidth) - crop.Left) * scale, ((float)(y * frameHeight) - crop.Top) * scale);
+            fill.Color = ClickColor.WithAlpha((byte)(ClickEffect.FillAlpha * opacity));
+            canvas.DrawCircle(center, r, fill);
+            float stroke = Math.Max(1.5f, r * (float)ClickEffect.RingWidth);
+            ring.StrokeWidth = stroke;
+            ring.Color = ClickColor.WithAlpha((byte)(ClickEffect.RingAlpha * opacity));
+            canvas.DrawCircle(center, r, ring);
+            float halo = Math.Max(1f, r * (float)ClickEffect.HaloWidth);
+            ring.StrokeWidth = halo;
+            ring.Color = SKColors.White.WithAlpha((byte)(ClickEffect.HaloAlpha * opacity));
+            canvas.DrawCircle(center, r + stroke / 2 + halo / 2, ring);
+        }
+    }
+
+    private static readonly SKColor ClickColor = new(ClickEffect.Red, ClickEffect.Green, ClickEffect.Blue);
 
     private sealed class VideoSource : IDisposable
     {

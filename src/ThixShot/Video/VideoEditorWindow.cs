@@ -22,8 +22,14 @@ internal sealed class VideoEditorWindow : MatWindow
     private readonly VideoInfo info;
     private VideoProject saved;
     private readonly List<ZoomPoint> points;
-    private readonly Stack<ZoomPoint[]> undo = new();
-    private readonly Stack<ZoomPoint[]> redo = new();
+    private readonly List<InputEvent> activity;
+    private bool showClicks;
+    private int selectedClick = -1;
+    private readonly Stack<EditorState> undo = new();
+    private readonly Stack<EditorState> redo = new();
+    private readonly CheckBox clicksVisible;
+    private readonly Button removeClick, autoZoom;
+    private readonly TextBlock activitySummary;
     private readonly VideoCanvas preview = new();
     private readonly ZoomTimeline timeline;
     private readonly ComboBox selection = new() { HorizontalAlignment = HorizontalAlignment.Stretch };
@@ -45,6 +51,7 @@ internal sealed class VideoEditorWindow : MatWindow
     {
         source = MediaLibrary.RequireItem(path);
         info = video; saved = project; points = [.. project.Zooms];
+        activity = [.. project.Activity]; showClicks = project.ShowClicks;
         selected = points.Count == 0 ? -1 : 0;
         Title = $"{Path.GetFileNameWithoutExtension(path)} · Videoeditor · ThixShot";
         Width = 1120; Height = 770; MinWidth = 800; MinHeight = 570;
@@ -80,15 +87,18 @@ internal sealed class VideoEditorWindow : MatWindow
         timeline = new ZoomTimeline
         {
             Duration = info.DurationSeconds,
-            Height = 106,
+            Height = ZoomTimeline.PreferredHeight,
             Zooms = points,
+            Activity = activity,
             Seek = t => { Pause(); SetTime(t); },
             SelectZoom = SelectZoom,
+            SelectActivity = SelectClick,
             BeginChange = Remember,
             MoveZoom = (i, z) => { if (i < 0 || i >= points.Count) return; points[i] = z; Sync(); SetTime(z.StartSeconds + z.DurationSeconds / 2); }
         };
-        AutomationProperties.SetName(timeline, "Video- und Zoomspur");
-        ToolTip.SetTip(timeline, "Bildspur zum Spulen anklicken. Zoomabschnitte verschieben, an den Enden ihre Dauer anpassen.");
+        AutomationProperties.SetName(timeline, "Video-, Zoom- und Klickspur");
+        ToolTip.SetTip(timeline, "Bildspur zum Spulen anklicken. Zoomabschnitte verschieben, an den Enden ihre Dauer anpassen. " +
+            "Unten: Punkte sind Klicks, Balken ist Tippen – einen Klick anklicken, um ihn auszuwählen.");
         var strip = new Border { Child = timeline, ClipToBounds = true, CornerRadius = new CornerRadius(7) };
         Grid.SetRow(strip, 2); center.Children.Add(strip);
         start = Number("Start in Sekunden", 0, (decimal)video.DurationSeconds, .1m, "0.00");
@@ -113,10 +123,26 @@ internal sealed class VideoEditorWindow : MatWindow
         ToolTip.SetTip(plus, "An der aktuellen Abspielposition einfügen (Z)");
         properties = Ui.Stack(10, Field("Abschnitt", selection), Field("Start (s)", start), Field("Dauer (s)", duration),
             Field("Vergrößerung (×)", scale), target, remove);
+        autoZoom = Ui.Button("Automatisch zoomen", "studio", AutoZoomFromActivity);
+        ToolTip.SetTip(autoZoom, "Ersetzt die Zooms durch automatische aus den Klicks und dem Tippen: ein Zoom je Arbeitsphase, " +
+            "beim Tippen bleibt er stehen, zu einer anderen Stelle schwenkt das Bild, nach einer Pause zoomt es heraus.");
         var inspector = Ui.Stack(14, new TextBlock { Text = "Zoom" }.Themed("MatText.SectionTitle"),
-            Wrap("Setze Zooms an der Abspielposition und wähle ihr Ziel direkt im Bild."), plus, properties);
+            Wrap("Setze Zooms an der Abspielposition und wähle ihr Ziel direkt im Bild."), plus, autoZoom, properties);
         if (!project.RecordedWithMaster)
             inspector.Children.Add(Wrap("Ältere Aufnahme. Bereits gerenderte Zooms gehören zum Ausgangsbild."));
+        clicksVisible = Ui.Check("Klicks im Video zeigen", showClicks, value =>
+        {
+            if (syncing || working || value == showClicks) return;
+            Remember(); showClicks = value; Sync();
+        });
+        ToolTip.SetTip(clicksVisible, "Ein Ring zeigt im Video, wo geklickt wurde");
+        removeClick = Ui.Button("Klick entfernen", "trash", RemoveClick).Themed("MatButton.Danger");
+        ToolTip.SetTip(removeClick, "Den ausgewählten Klick aus dem Video nehmen (Entf)");
+        activitySummary = Wrap("");
+        inspector.Children.Add(new TextBlock { Text = "Klicks und Tippen", Margin = new Thickness(0, 8, 0, 0) }.Themed("MatText.SectionTitle"));
+        inspector.Children.Add(activitySummary);
+        inspector.Children.Add(clicksVisible);
+        inspector.Children.Add(removeClick);
         var side = new Border { Padding = new Thickness(16), BorderThickness = new Thickness(1, 0, 0, 0), Child = new ScrollViewer { Content = inspector } }
             .Use(Border.BackgroundProperty, "Mat.Surface").Use(Border.BorderBrushProperty, "Mat.Border");
         var content = Ui.Columns("*,248", center, side);
@@ -159,7 +185,12 @@ internal sealed class VideoEditorWindow : MatWindow
         };
     }
 
-    private bool Dirty => !points.OrderBy(p => p.StartSeconds).SequenceEqual(saved.Zooms.OrderBy(p => p.StartSeconds));
+    /// <summary>One step of undo: the zooms, the clicks and typing, and whether clicks are shown.</summary>
+    private sealed record EditorState(ZoomPoint[] Zooms, InputEvent[] Activity, bool ShowClicks);
+
+    private bool Dirty => !points.OrderBy(p => p.StartSeconds).SequenceEqual(saved.Zooms.OrderBy(p => p.StartSeconds)) ||
+        !activity.OrderBy(a => a.Seconds).SequenceEqual(saved.Activity.OrderBy(a => a.Seconds)) || showClicks != saved.ShowClicks;
+    private IReadOnlyList<InputEvent> VisibleClicks => showClicks ? activity.Where(a => a.Kind == InputKind.Click).ToArray() : [];
     private static Control Field(string label, Control input) => Ui.Stack(4, new TextBlock { Text = label }.Themed("MatText.FieldLabel"), input);
     private static TextBlock Wrap(string text) => new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap }.Themed("MatText.Muted");
     private static NumericUpDown Number(string label, decimal min, decimal max, decimal increment, string format)
@@ -175,17 +206,44 @@ internal sealed class VideoEditorWindow : MatWindow
         };
         AutomationProperties.SetName(n, label); return n;
     }
-    private void Remember() { undo.Push(points.ToArray()); redo.Clear(); }
-    private void Restore(Stack<ZoomPoint[]> from, Stack<ZoomPoint[]> to)
+    private EditorState Snapshot() => new(points.ToArray(), activity.ToArray(), showClicks);
+    private void Remember() { undo.Push(Snapshot()); redo.Clear(); }
+    private void Restore(Stack<EditorState> from, Stack<EditorState> to)
     {
         if (working || !from.TryPop(out var snapshot)) return;
-        to.Push(points.ToArray()); points.Clear(); points.AddRange(snapshot);
-        selected = Math.Clamp(selected, -1, points.Count - 1); picking = false; Sync();
+        to.Push(Snapshot());
+        points.Clear(); points.AddRange(snapshot.Zooms);
+        activity.Clear(); activity.AddRange(snapshot.Activity);
+        showClicks = snapshot.ShowClicks;
+        selected = Math.Clamp(selected, -1, points.Count - 1);
+        selectedClick = selectedClick < activity.Count && selectedClick >= 0 && activity[selectedClick].Kind == InputKind.Click ? selectedClick : -1;
+        picking = false; Sync();
+    }
+    private void SelectClick(int index)
+    {
+        if (index < 0 || index >= activity.Count || activity[index].Kind != InputKind.Click) return;
+        Pause(); selectedClick = index; picking = false; Sync();
+        SetTime(activity[index].Seconds);
+        SetHint($"Klick bei {ZoomTimeline.Timecode(activity[index].Seconds)} ausgewählt.");
+    }
+    private void RemoveClick()
+    {
+        if (working || selectedClick < 0 || selectedClick >= activity.Count) return;
+        Remember(); activity.RemoveAt(selectedClick); selectedClick = -1; Sync();
+        SetHint("Klick entfernt.");
+    }
+    private void AutoZoomFromActivity()
+    {
+        if (working || activity.Count == 0) return;
+        Pause(); Remember();
+        points.Clear(); points.AddRange(AutoZoom.Build(activity, info.DurationSeconds));
+        selected = points.Count == 0 ? -1 : 0; picking = false; Sync();
+        SetHint(points.Count == 1 ? "1 Zoom aus Klicks und Tippen gesetzt." : $"{points.Count} Zooms aus Klicks und Tippen gesetzt.");
     }
     private void SelectZoom(int index)
     {
         if (index < 0 || index >= points.Count) return;
-        Pause(); selected = index; picking = false; Sync();
+        Pause(); selected = index; selectedClick = -1; picking = false; Sync();
         SetTime(points[index].StartSeconds + points[index].DurationSeconds / 2);
     }
     private void AddZoom()
@@ -228,7 +286,16 @@ internal sealed class VideoEditorWindow : MatWindow
             }
             preview.Target = picking && selected >= 0 ? points[selected] : null;
             preview.Cursor = new Cursor(picking ? StandardCursorType.Cross : StandardCursorType.Arrow);
-            preview.Zooms = points; timeline.SelectedIndex = selected; timeline.InvalidateVisual(); preview.InvalidateVisual();
+            preview.Zooms = points; preview.Clicks = VisibleClicks;
+            timeline.SelectedIndex = selected; timeline.SelectedClick = selectedClick; timeline.ShowClicks = showClicks;
+            timeline.InvalidateVisual(); preview.InvalidateVisual();
+            int clicks = activity.Count(a => a.Kind == InputKind.Click), typing = AutoZoom.Typing(activity).Length;
+            activitySummary.Text = activity.Count == 0
+                ? "Für diese Aufnahme wurden keine Klicks aufgezeichnet (ältere Aufnahme oder ohne Klicks)."
+                : $"{clicks} {(clicks == 1 ? "Klick" : "Klicks")} · {typing}× getippt. Ein Ring zeigt im Video, wo geklickt wurde.";
+            clicksVisible.IsChecked = showClicks; clicksVisible.IsEnabled = clicks > 0;
+            removeClick.IsVisible = selectedClick >= 0;
+            autoZoom.IsEnabled = activity.Count > 0;
             undoButton.IsEnabled = undo.Count > 0; redoButton.IsEnabled = redo.Count > 0; save.IsEnabled = Dirty;
             if (!working) SetHint(Dirty ? "Ungespeicherte Änderungen" : $"{info.Width} × {info.Height}  ·  {points.Count} Zooms");
         }
@@ -292,7 +359,7 @@ internal sealed class VideoEditorWindow : MatWindow
     }
     private void Save()
     {
-        try { saved = VideoProjects.Save(source, saved, points); Sync(); SetHint("Videoprojekt gespeichert."); }
+        try { saved = VideoProjects.Save(source, saved, new VideoEdit(points, activity, showClicks)); Sync(); SetHint("Videoprojekt gespeichert."); }
         catch (Exception error) { SetHint(error.Message); }
     }
     private async Task ExportAsync()
@@ -320,8 +387,9 @@ internal sealed class VideoEditorWindow : MatWindow
         try
         {
             var zooms = points.ToArray();
-            if (zooms.Length > 0)
-                await VideoEditService.ExportAsync(source, temporary, zooms, new Progress<double>(v => { if (working) SetHint($"MP4 wird gerendert · {v:P0}"); }), cancel.Token);
+            var clicks = VisibleClicks;
+            if (zooms.Length > 0 || clicks.Count > 0)
+                await VideoEditService.ExportAsync(source, temporary, zooms, clicks, new Progress<double>(v => { if (working) SetHint($"MP4 wird gerendert · {v:P0}"); }), cancel.Token);
             else
             {
                 await using var input = File.OpenRead(source);
@@ -350,7 +418,7 @@ internal sealed class VideoEditorWindow : MatWindow
         else if (e.Key == Key.Z && command) Restore(undo, redo);
         else if (e.Key == Key.S && command) Save();
         else if (e.Key == Key.Z) AddZoom();
-        else if (e.Key == Key.Delete) DeleteZoom();
+        else if (e.Key == Key.Delete) { if (selectedClick >= 0) RemoveClick(); else DeleteZoom(); }
         else if (e.Key == Key.Left || e.Key == Key.Right) { Pause(); SetTime(position + (e.Key == Key.Right ? 1 : -1) / 30d); }
         else if (e.Key == Key.Escape) { if (picking) { picking = false; Sync(); } else Close(); }
         else return;

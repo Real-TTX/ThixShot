@@ -8,6 +8,10 @@ using ThixShot.Capture;
 
 namespace ThixShot.Video;
 
+/// <summary>
+/// The timeline of the video editor: the time scale, the film strip, the zoom track (move a zoom, drag its ends) and the
+/// activity track below it – a dot for every click, a bar for every run of typing. A click is selected by clicking its dot.
+/// </summary>
 internal sealed class ZoomTimeline : Control
 {
     private enum DragMode { None, Seek, Move, Start, End }
@@ -15,18 +19,32 @@ internal sealed class ZoomTimeline : Control
     private ZoomPoint? original;
     private Point down;
     private bool changed;
-    private const double MarginX = 9, FilmTop = 24, FilmHeight = 41, TrackTop = 73, TrackHeight = 24;
+    private const double MarginX = 9, FilmTop = 24, FilmHeight = 41, TrackTop = 73, TrackHeight = 24, ActivityTop = 103, ActivityHeight = 20;
+    private const double DotRadius = 4.5, HitRadius = 7;
+    public const double PreferredHeight = ActivityTop + ActivityHeight + 4;
     private static readonly IBrush TextColor = new SolidColorBrush(Color.Parse("#BBC8DF"));
     private static readonly IBrush Track = new SolidColorBrush(Color.Parse("#273348"));
     private static readonly IBrush Selected = new SolidColorBrush(Color.Parse("#4E83EE"));
     private static readonly IBrush Normal = new SolidColorBrush(Color.Parse("#374E75"));
+    private static readonly IBrush Typing = new SolidColorBrush(Color.Parse("#5B6F93"));
+    private static readonly IBrush Click = new SolidColorBrush(Color.Parse("#7FA6F5"));
     public IReadOnlyList<ZoomPoint> Zooms { get; set; } = [];
     public int SelectedIndex { get; set; } = -1;
+
+    /// <summary>The clicks and the typing of the recording.</summary>
+    public IReadOnlyList<InputEvent> Activity { get; set; } = [];
+
+    /// <summary>The selected click (index into <see cref="Activity"/>), -1 for none.</summary>
+    public int SelectedClick { get; set; } = -1;
+
+    /// <summary>Whether the clicks are shown in the video; hidden clicks are drawn faint.</summary>
+    public bool ShowClicks { get; set; } = true;
     public double Duration { get; init; }
     public double Seconds { get; set; }
     public Bitmap?[] Frames { get; } = new Bitmap?[8];
     public Action<double>? Seek { get; set; }
     public Action<int>? SelectZoom { get; set; }
+    public Action<int>? SelectActivity { get; set; }
     public Action? BeginChange { get; set; }
     public Action<int, ZoomPoint>? MoveZoom { get; set; }
     private double TrackWidth => Math.Max(1, Bounds.Width - 2 * MarginX);
@@ -36,6 +54,9 @@ internal sealed class ZoomTimeline : Control
         TimeSpan.FromSeconds(Math.Max(0, seconds)).ToString(seconds >= 3600 ? @"h\:mm\:ss\.f" : @"m\:ss\.f", CultureInfo.InvariantCulture);
     private static FormattedText Label(string text, IBrush color) =>
         new(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface.Default, 11, color);
+
+    /// <summary>The centre of a click's dot on the activity track.</summary>
+    internal Point ClickPoint(int index) => new(X(Activity[index].Seconds), ActivityTop + ActivityHeight / 2);
 
     public override void Render(DrawingContext context)
     {
@@ -67,10 +88,38 @@ internal sealed class ZoomTimeline : Control
         for (int i = 0; i < Zooms.Count; i++)
             if (i != SelectedIndex) DrawZoom(context, i);
         if (SelectedIndex >= 0 && SelectedIndex < Zooms.Count) DrawZoom(context, SelectedIndex);
+        DrawActivity(context);
         var head = X(Seconds);
-        context.DrawLine(new Pen(Brushes.White, 1.5), new Point(head, 19), new Point(head, TrackTop + TrackHeight + 3));
+        context.DrawLine(new Pen(Brushes.White, 1.5), new Point(head, 19), new Point(head, ActivityTop + ActivityHeight + 2));
         context.DrawRectangle(Brushes.White, null, new Rect(head - 3, 17, 6, 7), 2, 2);
     }
+
+    private void DrawActivity(DrawingContext context)
+    {
+        var lane = new Rect(MarginX, ActivityTop, TrackWidth, ActivityHeight);
+        context.DrawRectangle(Track, null, lane, 4, 4);
+        if (Activity.Count == 0)
+        {
+            var empty = Label("Keine Klicks aufgezeichnet", TextColor);
+            context.DrawText(empty, new Point(MarginX + 8, ActivityTop + (ActivityHeight - empty.Height) / 2));
+            return;
+        }
+        using var clip = context.PushClip(lane);
+        foreach (var span in AutoZoom.Typing(Activity))
+        {
+            double left = X(span.StartSeconds);
+            context.DrawRectangle(Typing, null, new Rect(left, ActivityTop + 7, Math.Max(4, X(span.EndSeconds) - left), ActivityHeight - 14), 3, 3);
+        }
+        using var faint = context.PushOpacity(ShowClicks ? 1 : 0.4);
+        for (int i = 0; i < Activity.Count; i++)
+        {
+            if (Activity[i].Kind != InputKind.Click) continue;
+            bool selected = i == SelectedClick;
+            context.DrawEllipse(selected ? Brushes.White : Click, new Pen(selected ? Selected : Track, selected ? 2.5 : 1.5),
+                ClickPoint(i), DotRadius + (selected ? 1 : 0), DotRadius + (selected ? 1 : 0));
+        }
+    }
+
     private Rect Box(ZoomPoint z)
     {
         double left = X(z.StartSeconds);
@@ -89,11 +138,33 @@ internal sealed class ZoomTimeline : Control
             foreach (double x in new[] { rect.X + 3, rect.Right - 3 }) context.DrawLine(pen, new Point(x, TrackTop + 7), new Point(x, TrackTop + 17));
         }
     }
+
+    // The click whose dot is nearest to the point, within reach.
+    private int ClickAt(Point point)
+    {
+        if (point.Y < ActivityTop - 2 || point.Y > ActivityTop + ActivityHeight + 2) return -1;
+        int best = -1; double distance = HitRadius;
+        for (int i = 0; i < Activity.Count; i++)
+        {
+            if (Activity[i].Kind != InputKind.Click) continue;
+            double d = Math.Abs(ClickPoint(i).X - point.X);
+            if (d <= distance) { best = i; distance = d; }
+        }
+        return best;
+    }
+
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
         down = e.GetPosition(this); changed = false; original = null;
         drag = DragMode.Seek;
+        if (ClickAt(down) is >= 0 and var click)
+        {
+            SelectActivity?.Invoke(click);
+            drag = DragMode.None;
+            e.Handled = true;
+            return;
+        }
         int selected = SelectedIndex >= 0 && SelectedIndex < Zooms.Count && Box(Zooms[SelectedIndex]).Contains(down)
             ? SelectedIndex : Enumerable.Range(0, Zooms.Count).Reverse().FirstOrDefault(i => Box(Zooms[i]).Contains(down), -1);
         if (selected >= 0)

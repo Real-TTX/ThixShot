@@ -22,8 +22,10 @@ internal static class MacVideoEditor
         finally { File.Delete(image); }
     }
 
-    internal static Task ExportAsync(string path, string output, ZoomPoint[] points, IProgress<double>? progress, CancellationToken token) =>
-        RunAsync(["export", path, output], JsonSerializer.Serialize(points, JsonSerializerOptions.Web), progress, token);
+    // The plan of native/VideoEditing.swift: the zooms and the clicks whose rings are drawn.
+    internal static Task ExportAsync(string path, string output, ZoomPoint[] points, InputEvent[] clicks, IProgress<double>? progress, CancellationToken token) =>
+        RunAsync(["export", path, output], JsonSerializer.Serialize(new { zooms = points, clicks = clicks.Select(c => new { seconds = c.Seconds, x = c.X, y = c.Y }) },
+            JsonSerializerOptions.Web), progress, token);
 
     private static async Task<string> RunAsync(string[] args, string? input, IProgress<double>? progress, CancellationToken token)
     {

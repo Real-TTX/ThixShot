@@ -86,9 +86,9 @@ public static class CaptureService
             try
             {
                 if (OperatingSystem.IsWindows())
-                    session.ZoomPoints = WindowsRecording.Record(temporaryPath, options, session.StopSignal.Task, ready);
+                    session.Activity = WindowsRecording.Record(temporaryPath, options, session.StopSignal.Task, ready);
                 else
-                    session.ZoomPoints = await MacCapture.RecordAsync(temporaryPath, options, session.StopSignal.Task, ready).ConfigureAwait(false);
+                    session.Activity = await MacCapture.RecordAsync(temporaryPath, options, session.StopSignal.Task, ready).ConfigureAwait(false);
 
                 if (!session.StopSignal.Task.IsCompleted)
                     throw new IOException("Die Bildschirmaufnahme wurde unerwartet beendet.");
@@ -149,7 +149,8 @@ public sealed class RecordingSession : IAsyncDisposable
     internal RecordingSession() { }
     internal TaskCompletionSource<bool> StopSignal { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public Task Completion { get; internal set; } = Task.CompletedTask;
-    public IReadOnlyList<ZoomPoint> ZoomPoints { get; internal set; } = [];
+    /// <summary>The clicks and the typing of the recording (always recorded; <see cref="RecordingOptions.FocusZoom"/> decides whether zooms are made from them).</summary>
+    public IReadOnlyList<InputEvent> Activity { get; internal set; } = [];
 
     public Task StopAsync()
     {

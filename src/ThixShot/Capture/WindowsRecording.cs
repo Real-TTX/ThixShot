@@ -15,7 +15,7 @@ internal static class WindowsRecording
     private const int FramesPerSecond = 30;
     internal const long TicksPerSecond = TimeSpan.TicksPerSecond;
 
-    public static IReadOnlyList<ZoomPoint> Record(string path, RecordingOptions options, Task stop, TaskCompletionSource ready)
+    public static IReadOnlyList<InputEvent> Record(string path, RecordingOptions options, Task stop, TaskCompletionSource ready)
     {
         using var desktop = new WindowsDesktop(options.Region, true);
         try { MediaFactory.MFStartup(true).CheckError(); }
@@ -32,12 +32,11 @@ internal static class WindowsRecording
             writer.BeginWriting();
             elapsed.Start();
             audio?.Start();
-            var clicks = new List<ZoomPoint>();
-            bool wasPressed = options.FocusZoom && WindowsDesktop.GetAsyncKeyState(1) < 0;
+            var activity = new ActivityRecorder(desktop.Region);
             long frameStart = 0;
             do
             {
-                if (options.FocusZoom) CollectClick(desktop.Region, elapsed.Elapsed.TotalSeconds, clicks, ref wasPressed);
+                activity.Poll(elapsed.Elapsed.TotalSeconds);
                 desktop.CopyFrame(desktop.Region, options.ShowCursor);
                 int length = checked(desktop.Width * desktop.Height * 4);
                 using var buffer = MediaFactory.MFCreateMemoryBuffer(length);
@@ -54,7 +53,7 @@ internal static class WindowsRecording
             } while (!stop.IsCompleted);
             audio?.Finish(elapsed.Elapsed.Ticks);
             writer.Finalize();
-            return clicks.AsReadOnly();
+            return activity.Events;
         }
         finally
         {
@@ -62,16 +61,60 @@ internal static class WindowsRecording
         }
     }
 
-    private static void CollectClick(CaptureRegion region, double seconds, List<ZoomPoint> points, ref bool wasPressed)
+    /// <summary>
+    /// Clicks and keystrokes during a recording, polled once per frame: a click where it happened, a keystroke (never which key)
+    /// at the text cursor when Windows names it, else at the last click. Nothing on ThixShot's own windows counts.
+    /// </summary>
+    private sealed class ActivityRecorder(CaptureRegion region)
     {
-        bool pressed = WindowsDesktop.GetAsyncKeyState(1) < 0;
-        if (pressed && !wasPressed && WindowsDesktop.GetCursorPos(out var pointer) && !WindowsDesktop.IsThixShotWindowAt(pointer))
+        // Keys that type or edit text: backspace, tab, enter, space, page/arrows/delete, 0-9, A-Z, numpad, OEM punctuation.
+        private static readonly int[] TypingKeys = [0x08, 0x09, 0x0D, 0x20, .. Enumerable.Range(0x21, 0x0F), .. Enumerable.Range(0x30, 0x0A),
+            .. Enumerable.Range(0x41, 0x1A), .. Enumerable.Range(0x60, 0x10), .. Enumerable.Range(0xBA, 0x07), .. Enumerable.Range(0xDB, 0x05), 0xE2];
+
+        private readonly List<InputEvent> events = [];
+        private readonly bool[] keyDown = new bool[256];
+        private bool leftDown = Pressed(0x01), rightDown = Pressed(0x02);
+        private (double X, double Y)? lastClick;
+        private double lastTyping = double.NegativeInfinity;
+
+        public IReadOnlyList<InputEvent> Events => events.AsReadOnly();
+
+        public void Poll(double seconds)
         {
-            double x = (pointer.X - region.X) / (double)region.Width, y = (pointer.Y - region.Y) / (double)region.Height;
-            if (x is >= 0 and < 1 && y is >= 0 and < 1)
-                points.Add(new ZoomPoint(seconds, 2, x, y, 1.55));
+            bool left = Pressed(0x01), right = Pressed(0x02);
+            if ((left && !leftDown || right && !rightDown) && WindowsDesktop.GetCursorPos(out var pointer) &&
+                !WindowsDesktop.IsThixShotWindowAt(pointer) && Inside(pointer.X, pointer.Y) is { } click)
+            {
+                events.Add(new InputEvent(seconds, InputKind.Click, click.X, click.Y));
+                lastClick = click;
+            }
+
+            leftDown = left; rightDown = right;
+            bool typed = false;
+            foreach (int key in TypingKeys)
+            {
+                bool down = Pressed(key);
+                typed |= down && !keyDown[key];
+                keyDown[key] = down;
+            }
+
+            // One keystroke event every 0.2 s is enough to keep a zoom and draw the typing on the timeline.
+            if (!typed || seconds - lastTyping < 0.2 || WindowsDesktop.IsThixShotInFront()) return;
+            var at = WindowsDesktop.TextCursor() is { } caret ? Inside(caret.X, caret.Y) : null;
+            at ??= lastClick;
+            if (at is null && WindowsDesktop.GetCursorPos(out var mouse)) at = Inside(mouse.X, mouse.Y);
+            if (at is not { } place) return;
+            events.Add(new InputEvent(seconds, InputKind.Typing, place.X, place.Y));
+            lastTyping = seconds;
         }
-        wasPressed = pressed;
+
+        private (double X, double Y)? Inside(int x, int y)
+        {
+            double fx = (x - region.X) / (double)region.Width, fy = (y - region.Y) / (double)region.Height;
+            return fx is >= 0 and < 1 && fy is >= 0 and < 1 ? (fx, fy) : null;
+        }
+
+        private static bool Pressed(int key) => WindowsDesktop.GetAsyncKeyState(key) < 0;
     }
 
     internal static int AddVideo(IMFSinkWriter writer, int width, int height)

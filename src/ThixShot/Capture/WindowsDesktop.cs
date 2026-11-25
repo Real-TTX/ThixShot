@@ -7,7 +7,8 @@ namespace ThixShot.Capture;
 
 internal sealed class WindowsDesktop : IDisposable
 {
-    private const int SourceCopyWithLayers = 0x00CC0020 | 0x40000000;
+    private const int SourceCopy = 0x00CC0020;
+    private const int SourceCopyWithLayers = SourceCopy | 0x40000000; // CAPTUREBLT
     private const int VirtualLeft = 76, VirtualTop = 77, VirtualWidth = 78, VirtualHeight = 79;
     private readonly nint previousDpiContext;
     private nint screen, memory, bitmap, previousBitmap;
@@ -99,8 +100,10 @@ internal sealed class WindowsDesktop : IDisposable
     public void CopyFrame(CaptureRegion viewport, bool showCursor)
     {
         CheckAccess();
+        // No CAPTUREBLT for video: it hides and shows the real mouse pointer at every frame, so the pointer flickers on screen
+        // 30 times a second. The composed desktop (Windows 8 and later) holds the layered windows anyway.
         if (!StretchBlt(memory, 0, 0, Width, Height, screen, viewport.X, viewport.Y, viewport.Width,
-                viewport.Height, SourceCopyWithLayers))
+                viewport.Height, SourceCopy))
             throw new Win32Exception(Marshal.GetLastWin32Error(), "Windows hat die Bildschirmaufnahme unterbrochen.");
         if (showCursor)
             DrawCursor(viewport);

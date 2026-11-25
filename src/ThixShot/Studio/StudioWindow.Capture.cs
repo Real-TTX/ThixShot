@@ -179,7 +179,7 @@ internal sealed partial class StudioWindow
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         panel.Closed += (_, _) => cancel.Cancel();
         panel.KeyDown += (_, e) => { if (e.Key == Key.Escape) panel.Close(); };
-        panel.Content = CaptureBar("clock", "Mat.AccentText", label, Ui.Button("Abbrechen", null, panel.Close));
+        panel.Content = GlassPanel.Apply(panel, CaptureBar("clock", "Mat.AccentText", label, Ui.Button("Abbrechen", null, panel.Close)), 18);
         panel.Show();
         try
         {
@@ -197,11 +197,7 @@ internal sealed partial class StudioWindow
         var glyph = new MatIcon { Icon = icon, Size = 18, IsFilled = icon == "circle", VerticalAlignment = VerticalAlignment.Center }
             .Use(MatIcon.ForegroundProperty, color);
         var row = Ui.Row(12, glyph, label, action);
-        return new Border
-        {
-            Child = row, Padding = new Thickness(15, 9), BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(18)
-        }.Use(Border.BackgroundProperty, "Mat.Surface").Use(Border.BorderBrushProperty, "Mat.BorderStrong");
+        return new Border { Child = row, Padding = new Thickness(15, 9) };
     }
 
     private Window Floating(string title, bool activateOnShow = false)
@@ -254,7 +250,7 @@ internal sealed partial class StudioWindow
         var panel = Floating("ThixShot · Bildschirmaufnahme");
         var stopButton = Ui.Button("Stopp", "stop", RequestStop, "primary");
         AutomationProperties.SetHelpText(stopButton, "Aufnahme beenden und Video in der Mediathek speichern.");
-        panel.Content = CaptureBar("circle", "Mat.DangerText", timerLabel, stopButton);
+        panel.Content = GlassPanel.Apply(panel, CaptureBar("circle", "Mat.DangerText", timerLabel, stopButton), 18);
         var clock = new Stopwatch();
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
         timer.Tick += (_, _) =>

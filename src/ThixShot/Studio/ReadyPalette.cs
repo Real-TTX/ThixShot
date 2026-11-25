@@ -70,7 +70,7 @@ internal sealed class ReadyPalette : Window
         var row = Ui.Row(6, grip, rule, shot, record, more, studio);
         row.HorizontalAlignment = HorizontalAlignment.Center;
         row.VerticalAlignment = VerticalAlignment.Center;
-        SetGlassContent(row);
+        Content = GlassPanel.Apply(this, row, 23);
 
         saveTimer.Tick += (_, _) => SavePosition();
         PositionChanged += (_, _) =>
@@ -110,26 +110,6 @@ internal sealed class ReadyPalette : Window
     {
         AutomationProperties.SetName(control, label);
         ToolTip.SetTip(control, tip);
-    }
-
-    private void SetGlassContent(Control content)
-    {
-        Background = Brushes.Transparent;
-        TransparencyLevelHint = [WindowTransparencyLevel.AcrylicBlur, WindowTransparencyLevel.Blur,
-            WindowTransparencyLevel.Transparent, WindowTransparencyLevel.None];
-        var backdrop = new Border { CornerRadius = new CornerRadius(22) }.Use(Border.BackgroundProperty, "Mat.Surface");
-        void UpdateTint()
-        {
-            var blur = ActualTransparencyLevel == WindowTransparencyLevel.AcrylicBlur || ActualTransparencyLevel == WindowTransparencyLevel.Blur;
-            backdrop.Opacity = blur ? .74 : ActualTransparencyLevel == WindowTransparencyLevel.Transparent ? .88 : 1;
-        }
-        PropertyChanged += (_, e) => { if (e.Property == ActualTransparencyLevelProperty) UpdateTint(); };
-        UpdateTint();
-        Content = new Border
-        {
-            CornerRadius = new CornerRadius(23), ClipToBounds = true, BorderThickness = new Thickness(1),
-            Child = new Grid { Children = { backdrop, content } }
-        }.Use(Border.BorderBrushProperty, "Mat.BorderStrong");
     }
 
     internal void ShowReady()
